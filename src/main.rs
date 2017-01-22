@@ -1,6 +1,8 @@
 extern crate futures;
 extern crate tokio_core;
 extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
 
 use std::io::{Result, Error, ErrorKind};
 
@@ -12,12 +14,30 @@ use serde_json::Value;
 use serde_json::ser::to_vec;
 use serde_json::de::from_slice;
 
+// TODO: This isn't exactly what we want. We want to have an enum (request, result, notification) ‒
+// can serde parse that?
+#[derive(Debug, Deserialize)]
+struct Incoming {
+    // Should be 2.0
+    jsonrpc: String,
+    method: String,
+    params: Option<Value>,
+    id: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct Outgoing {
+    result: Value,
+    error: Value,
+    id: Value
+}
+
 struct JsonCodec;
 
 impl Codec for JsonCodec {
-    type In = Value;
-    type Out = Value;
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Value>> {
+    type In = Incoming;
+    type Out = Outgoing;
+    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Incoming>> {
         // TODO: Optimise by storing the previous position if we didn't find it
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             let line = buf.drain_to(i);
@@ -29,8 +49,9 @@ impl Codec for JsonCodec {
             Ok(None)
         }
     }
-    fn encode(&mut self, msg: Value, buf: &mut Vec<u8>) -> Result<()> {
+    fn encode(&mut self, msg: Outgoing, buf: &mut Vec<u8>) -> Result<()> {
         *buf = to_vec(&msg).map_err(|e| Error::new(ErrorKind::Other, e))?;
+        buf.push(b'\n');
         Ok(())
     }
 }
@@ -44,7 +65,16 @@ fn main() {
     let service = connections.for_each(|(stream, _)| {
         let parsed = stream.framed(JsonCodec);
         let (w, r) = parsed.split();
-        let sent = w.send_all(r)
+        let transferred = r.filter_map(|input|
+            match input.id {
+                Some(id) => Some(Outgoing {
+                    result: input.params.unwrap_or(Value::Null),
+                    error: Value::Null,
+                    id: id
+                }),
+                None => None,
+            });
+        let sent = w.send_all(transferred)
             .map(|_| ())
             .map_err(|_| {
                 // TODO Something with the error ‒ logging?
