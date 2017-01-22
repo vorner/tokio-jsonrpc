@@ -16,7 +16,7 @@ use serde_json::de::from_slice;
 
 // TODO: This isn't exactly what we want. We want to have an enum (request, result, notification) ‒
 // can serde parse that?
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Incoming {
     // Should be 2.0
     jsonrpc: String,
@@ -25,18 +25,24 @@ struct Incoming {
     id: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Outgoing {
     result: Value,
     error: Value,
     id: Value
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+enum Message {
+    In(Incoming),
+    Out(Outgoing),
+}
+
 struct JsonCodec;
 
 impl Codec for JsonCodec {
     type In = Incoming;
-    type Out = Outgoing;
+    type Out = Message;
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Incoming>> {
         // TODO: Optimise by storing the previous position if we didn't find it
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
@@ -49,7 +55,7 @@ impl Codec for JsonCodec {
             Ok(None)
         }
     }
-    fn encode(&mut self, msg: Outgoing, buf: &mut Vec<u8>) -> Result<()> {
+    fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> Result<()> {
         *buf = to_vec(&msg).map_err(|e| Error::new(ErrorKind::Other, e))?;
         buf.push(b'\n');
         Ok(())
@@ -67,11 +73,11 @@ fn main() {
         let (w, r) = parsed.split();
         let transferred = r.filter_map(|input|
             match input.id {
-                Some(id) => Some(Outgoing {
+                Some(id) => Some(Message::Out(Outgoing {
                     result: input.params.unwrap_or(Value::Null),
                     error: Value::Null,
                     id: id
-                }),
+                })),
                 None => None,
             });
         let sent = w.send_all(transferred)
