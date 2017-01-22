@@ -1,0 +1,10 @@
+[package]
+name = "echo-jsonrpc"
+version = "0.1.0"
+authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+
+[dependencies]
+futures = "0.1"
+tokio-core = "0.1"
+serde = "0.8"
+serde_json = "0.8"
