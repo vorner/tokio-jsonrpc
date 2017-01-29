@@ -5,6 +5,10 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
+mod message;
+
+use message::{Message, Response, RPCError};
+
 use std::io::{Result as IoResult, Error, ErrorKind};
 
 use futures::{Future, Sink, Stream};
@@ -12,85 +16,9 @@ use futures::stream::{once, Once};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_core::io::{Codec,EasyBuf,Io};
-use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde_json::Value;
-use serde_json::ser::to_vec;
 use serde_json::de::from_slice;
-
-// TODO: Modify the serialize/deserialize so it generates the right JSON
-
-#[derive(Debug, Deserialize)]
-struct Version;
-
-impl Serialize for Version {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str("2.0")
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Request {
-    jsonrpc: Version,
-    pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
-    pub id: Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RPCError {
-    pub code: i64,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Response {
-    pub result: Result<Value, RPCError>,
-    pub id: Value,
-}
-
-impl Serialize for Response {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut sub = serializer.serialize_struct("Response", 2)?;
-        sub.serialize_field("id", &self.id)?;
-        match self.result {
-            Ok(ref value) => sub.serialize_field("result", value),
-            Err(ref err) => sub.serialize_field("error", err),
-        }?;
-        sub.end()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Notification {
-    jsonrpc: Version,
-    pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub enum Message {
-    Request(Request),
-    Response(Response),
-    Notification(Notification),
-    Batch(Vec<Message>),
-    Unmatched(Value),
-}
-
-impl Serialize for Message {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match *self {
-            Message::Request(ref req) => req.serialize(serializer),
-            Message::Response(ref resp) => resp.serialize(serializer),
-            Message::Notification(ref notif) => notif.serialize(serializer),
-            Message::Batch(ref batch) => batch.serialize(serializer),
-            Message::Unmatched(ref val) => val.serialize(serializer),
-        }
-    }
-}
+use serde_json::ser::to_vec;
 
 fn err_map(e: serde_json::error::Error) -> Error {
     Error::new(ErrorKind::Other, e)
@@ -129,10 +57,10 @@ fn main() {
         let (w, r) = jsonized.split();
         let header: Once<_, Error> = once(Ok(Message::Batch(
             vec![
-                Message::Request(Request { jsonrpc: Version, method: "Hello".to_owned(), params: Some(Value::Null), id: Value::Bool(true) }),
+                Message::request("Hello".to_owned(), Some(Value::Null)),
                 Message::Response(Response { result: Ok(Value::Bool(false)), id: Value::Bool(true) }),
                 Message::Response(Response { result: Err(RPCError { code: 42, message: "Wrong!".to_owned(), data: None }), id: Value::Null }),
-                Message::Notification(Notification { jsonrpc: Version, method: "Alert!".to_owned(), params: Some(Value::String("blabla".to_owned())) }),
+                Message::notification("Alert!".to_owned(), Some(Value::String("blabla".to_owned()))),
                 Message::Unmatched(Value::String(String::new())),
             ])));
         let sent = w.send_all(header).and_then(|(sink, _)| sink.send_all(r))
