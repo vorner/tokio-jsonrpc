@@ -6,6 +6,6 @@ authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 [dependencies]
 futures = "0.1"
 tokio-core = "0.1"
-serde = "0.8"
-serde_derive = "0.8"
-serde_json = "0.8"
+serde = "0.9"
+serde_derive = "0.9"
+serde_json = "0.9"
