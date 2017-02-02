@@ -1,12 +1,25 @@
 use serde::ser::{Serialize, Serializer, SerializeStruct};
-use serde_json::Value;
+use serde::de::{Deserialize, Deserializer, Unexpected, Error};
+use serde_json::{Value, from_value};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Version;
 
 impl Serialize for Version {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str("2.0")
+    }
+}
+
+impl Deserialize for Version {
+    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
+        // The version is actually a string
+        let parsed: String = Deserialize::deserialize(deserializer)?;
+        if parsed == "2.0" {
+            Ok(Version)
+        } else {
+            Err(D::Error::invalid_value(Unexpected::Str(&parsed), &"value 2.0"))
+        }
     }
 }
 
@@ -54,7 +67,7 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub enum Message {
     Request(Request),
     Response(Response),
@@ -92,5 +105,27 @@ impl Serialize for Message {
             Message::Batch(ref batch) => batch.serialize(serializer),
             Message::Unmatched(ref val) => val.serialize(serializer),
         }
+    }
+}
+
+macro_rules! deser_branch {
+    ($src:expr, $branch:ident) => {
+        match from_value($src.clone()) {
+            Ok(parsed) => return Ok(Message::$branch(parsed)),
+            Err(_) => (),
+        }
+    };
+}
+
+impl Deserialize for Message {
+    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
+        // Read it as a JSON (delegate the deserialization)
+        let preparsed: Value = Deserialize::deserialize(deserializer)?;
+        // And try decoding it as a concrete message type, one by one (and get a first match)
+        deser_branch!(preparsed, Request);
+        deser_branch!(preparsed, Response);
+        deser_branch!(preparsed, Notification);
+        deser_branch!(preparsed, Batch);
+        Ok(Message::Unmatched(preparsed))
     }
 }
