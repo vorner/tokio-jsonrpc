@@ -37,7 +37,6 @@ pub struct Request {
     pub method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
-    // TODO: Make private?
     pub id: Value,
 }
 
@@ -51,7 +50,7 @@ pub struct RPCError {
 }
 
 /// A response to RPC
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub result: Result<Value, RPCError>,
     pub id: Value,
@@ -69,7 +68,35 @@ impl Serialize for Response {
     }
 }
 
-// TODO: We probably need a custom deserialize here as well
+#[derive(Deserialize)]
+struct WireResponse {
+    result: Option<Value>,
+    error: Option<RPCError>,
+    id: Value,
+}
+
+// Implementing deserialize is hard. We sidestep the difficulty by deserializing a similar
+// structure that directly corresponds to whatever is on the wire and then convert it to our more
+// convenient representation.
+impl Deserialize for Response {
+    #[allow(unreachable_code)] // For that unreachable below
+    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
+        let wr: WireResponse = Deserialize::deserialize(deserializer)?;
+        let result = match (wr.result, wr.error) {
+            (Some(res), None) => Ok(res),
+            (None, Some(err)) => Err(err),
+            _ => {
+                return Err(D::Error::custom("Either 'error' or 'result' is expected, but not both"));
+                // A trick to make the compiler accept this branch
+                unreachable!();
+            }
+        };
+        Ok(Response {
+            result: result,
+            id: wr.id,
+        })
+    }
+}
 
 /// A notification (doesn't expect an answer)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
