@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde::de::{Deserialize, Deserializer, Unexpected, Error};
-use serde_json::{Value, from_value};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Version;
@@ -69,6 +69,8 @@ impl Serialize for Response {
     }
 }
 
+// TODO: We probably need a custom deserialize here as well
+
 /// A notification (doesn't expect an answer)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Notification {
@@ -95,7 +97,8 @@ pub struct Notification {
 /// The `Batch` variant is supposed to be created directly, without a constructor. The `Unmatched`
 /// is something you may get from parsing but it is not expected you'd need to create it (though it
 /// can be created directly as well).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Message {
     Request(Request),
     Response(Response),
@@ -113,7 +116,7 @@ impl Message {
             jsonrpc: Version,
             method: method,
             params: params,
-            // TODO!
+            // TODO: Generate the ID.
             id: Value::Null,
         })
     }
@@ -160,50 +163,6 @@ impl Message {
             method: method,
             params: params,
         })
-    }
-}
-
-impl Serialize for Message {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match *self {
-            Message::Request(ref req) => req.serialize(serializer),
-            Message::Response(ref resp) => resp.serialize(serializer),
-            Message::Notification(ref notif) => notif.serialize(serializer),
-            Message::Batch(ref batch) => batch.serialize(serializer),
-            Message::Unmatched(ref val) => val.serialize(serializer),
-        }
-    }
-}
-
-macro_rules! deser_branch {
-    ($src:expr, $branch:ident) => {
-        match from_value($src.clone()) {
-            Ok(parsed) => return Message::$branch(parsed),
-            Err(_) => (),
-        }
-    };
-}
-
-// TODO: This must be possible to do in less wasteful way. The cloning is stupid :-(
-// There seems to be a feature coming in a future release that'd make all this unnecessary.
-// https://github.com/serde-rs/serde/pull/739.
-impl From<Value> for Message {
-    fn from(v: Value) -> Self {
-        // Try decoding it by each branch in sequence, taking the first one that matches
-        deser_branch!(v, Request);
-        deser_branch!(v, Response);
-        deser_branch!(v, Notification);
-        deser_branch!(v, Batch);
-        Message::Unmatched(v)
-    }
-}
-
-impl Deserialize for Message {
-    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
-        // Read it as a JSON (delegate the deserialization)
-        let preparsed: Value = Deserialize::deserialize(deserializer)?;
-        // Convert it
-        Ok(Self::from(preparsed))
     }
 }
 
