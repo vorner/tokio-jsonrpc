@@ -1,8 +1,10 @@
+use std::str::FromStr;
+
 use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde::de::{Deserialize, Deserializer, Unexpected, Error};
 use serde_json::{Value, from_value};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Version;
 
 impl Serialize for Version {
@@ -23,7 +25,7 @@ impl Deserialize for Version {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Request {
     jsonrpc: Version,
     pub method: String,
@@ -33,7 +35,7 @@ pub struct Request {
     pub id: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RPCError {
     pub code: i64,
     pub message: String,
@@ -41,7 +43,7 @@ pub struct RPCError {
     pub data: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct Response {
     pub result: Result<Value, RPCError>,
     pub id: Value,
@@ -59,7 +61,7 @@ impl Serialize for Response {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Notification {
     jsonrpc: Version,
     pub method: String,
@@ -67,7 +69,7 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Request(Request),
     Response(Response),
@@ -111,21 +113,41 @@ impl Serialize for Message {
 macro_rules! deser_branch {
     ($src:expr, $branch:ident) => {
         match from_value($src.clone()) {
-            Ok(parsed) => return Ok(Message::$branch(parsed)),
+            Ok(parsed) => return Message::$branch(parsed),
             Err(_) => (),
         }
     };
+}
+
+impl From<Value> for Message {
+    fn from(v: Value) -> Self {
+        // Try decoding it by each branch in sequence, taking the first one that matches
+        deser_branch!(v, Request);
+        deser_branch!(v, Response);
+        deser_branch!(v, Notification);
+        deser_branch!(v, Batch);
+        Message::Unmatched(v)
+    }
 }
 
 impl Deserialize for Message {
     fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
         // Read it as a JSON (delegate the deserialization)
         let preparsed: Value = Deserialize::deserialize(deserializer)?;
-        // And try decoding it as a concrete message type, one by one (and get a first match)
-        deser_branch!(preparsed, Request);
-        deser_branch!(preparsed, Response);
-        deser_branch!(preparsed, Notification);
-        deser_branch!(preparsed, Batch);
-        Ok(Message::Unmatched(preparsed))
+        // Convert it
+        Ok(Self::from(preparsed))
+    }
+}
+
+impl FromStr for Message {
+    type Err = ::serde_json::error::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ::serde_json::de::from_str(s)
+    }
+}
+
+impl Into<String> for Message {
+    fn into(self) -> String {
+        ::serde_json::ser::to_string(&self).unwrap()
     }
 }
