@@ -1,13 +1,10 @@
+extern crate echo_jsonrpc;
+
 extern crate futures;
 extern crate tokio_core;
-extern crate serde;
 extern crate serde_json;
-#[macro_use]
-extern crate serde_derive;
 
-mod message;
-
-use message::{Message, Response, RPCError};
+use echo_jsonrpc::message::{Message, Response, RPCError};
 
 use std::io::{Result as IoResult, Error, ErrorKind};
 

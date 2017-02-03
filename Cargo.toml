@@ -10,6 +10,12 @@ serde = "0.9"
 serde_derive = "0.9"
 serde_json = "0.9"
 
+[lib]
+
+[[bin]]
+name = "echo_jsonrpc"
+doc = false
+
 [profile.dev]
 codegen-units = 4
 

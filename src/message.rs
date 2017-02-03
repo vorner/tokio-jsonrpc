@@ -1,3 +1,8 @@
+//! A JSON-RPC 2.0 messages
+//!
+//! The main entrypoint here is the [Message](enum.Message.html). The others are just building
+//! blocks and you should generally work with `Message` instead.
+
 use std::str::FromStr;
 
 use serde::ser::{Serialize, Serializer, SerializeStruct};
@@ -25,6 +30,7 @@ impl Deserialize for Version {
     }
 }
 
+/// An RPC request
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Request {
     jsonrpc: Version,
@@ -35,6 +41,7 @@ pub struct Request {
     pub id: Value,
 }
 
+/// An error code
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RPCError {
     pub code: i64,
@@ -43,6 +50,7 @@ pub struct RPCError {
     pub data: Option<Value>,
 }
 
+/// A response to RPC
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct Response {
     pub result: Result<Value, RPCError>,
@@ -61,6 +69,7 @@ impl Serialize for Response {
     }
 }
 
+/// A notification (doesn't expect an answer)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Notification {
     jsonrpc: Version,
@@ -69,6 +78,19 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
+/// One message of the JSON RPC protocol
+///
+/// One message, directly mapped from the structures of the protocol. See the
+/// [specification](http://www.jsonrpc.org/specification) for more details.
+///
+/// Since the protocol allows one endpoint to be both client and server at the same time, the
+/// message can decode and encode both directions of the protocol.
+///
+/// The `Unmatched` variant is for cases when the message that arrived is valid JSON, but doesn't
+/// match the protocol. It allows for handling these non-fatal errors on higher level than the
+/// parser.
+///
+/// It can be serialized and deserialized, or converted to and from a string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Request(Request),
@@ -79,6 +101,9 @@ pub enum Message {
 }
 
 impl Message {
+    /// A constructor for a request.
+    ///
+    /// The ID is auto-generated.
     pub fn request(method: String, params: Option<Value>) -> Self {
         Message::Request(Request {
             jsonrpc: Version,
@@ -88,6 +113,7 @@ impl Message {
             id: Value::Null,
         })
     }
+    /// A constructor for a notification.
     pub fn notification(method: String, params: Option<Value>) -> Self {
         Message::Notification(Notification {
             jsonrpc: Version,
@@ -120,6 +146,8 @@ macro_rules! deser_branch {
 }
 
 // TODO: This must be possible to do in less wasteful way. The cloning is stupid :-(
+// There seems to be a feature coming in a future release that'd make all this unnecessary.
+// https://github.com/serde-rs/serde/pull/739.
 impl From<Value> for Message {
     fn from(v: Value) -> Self {
         // Try decoding it by each branch in sequence, taking the first one that matches
