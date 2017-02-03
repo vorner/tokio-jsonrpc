@@ -119,6 +119,7 @@ macro_rules! deser_branch {
     };
 }
 
+// TODO: This must be possible to do in less wasteful way. The cloning is stupid :-(
 impl From<Value> for Message {
     fn from(v: Value) -> Self {
         // Try decoding it by each branch in sequence, taking the first one that matches
