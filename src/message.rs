@@ -91,6 +91,10 @@ pub struct Notification {
 /// parser.
 ///
 /// It can be serialized and deserialized, or converted to and from a string.
+///
+/// The `Batch` variant is supposed to be created directly, without a constructor. The `Unmatched`
+/// is something you may get from parsing but it is not expected you'd need to create it (though it
+/// can be created directly as well).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Request(Request),
@@ -113,6 +117,42 @@ impl Message {
             id: Value::Null,
         })
     }
+    /// Answer the request with a (positive) reply.
+    ///
+    /// The ID is taken from the request.
+    pub fn reply(request: &Request, reply: Value) -> Self {
+        Message::Response(Response {
+            result: Ok(reply),
+            id: request.id.clone(),
+        })
+    }
+    /// Answer the request with an error.
+    ///
+    /// The ID is taken from the request and the error structure is constructed.
+    pub fn error(request: &Request, code: i64, message: String, data: Option<Value>) -> Self {
+        Message::Response(Response {
+            result: Err(RPCError {
+                code: code,
+                message: message,
+                data: data,
+            }),
+            id: request.id.clone(),
+        })
+    }
+    /// Create an error without a request.
+    ///
+    /// Create a top-level/free-standing error (one without an ID). This is the required answer for
+    /// less serious protocol errors.
+    pub fn top_error(code: i64, message: String, data: Option<Value>) -> Self {
+        Message::Response(Response {
+            result: Err(RPCError {
+                code: code,
+                message: message,
+                data: data,
+            }),
+            id: Value::Null,
+        })
+    }
     /// A constructor for a notification.
     pub fn notification(method: String, params: Option<Value>) -> Self {
         Message::Notification(Notification {
@@ -121,7 +161,6 @@ impl Message {
             params: params,
         })
     }
-    // TODO: Other constructors
 }
 
 impl Serialize for Message {
