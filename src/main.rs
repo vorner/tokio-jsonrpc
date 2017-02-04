@@ -4,7 +4,7 @@ extern crate futures;
 extern crate tokio_core;
 extern crate serde_json;
 
-use echo_jsonrpc::message::{Message, Response, RPCError};
+use echo_jsonrpc::message::{Message};
 
 use std::io::{Result as IoResult, Error, ErrorKind};
 
@@ -55,8 +55,7 @@ fn main() {
         let header: Once<_, Error> = once(Ok(Message::Batch(
             vec![
                 Message::request("Hello".to_owned(), Some(Value::Null)),
-                Message::Response(Response { result: Ok(Value::Bool(false)), id: Value::Bool(true) }),
-                Message::Response(Response { result: Err(RPCError { code: 42, message: "Wrong!".to_owned(), data: None }), id: Value::Null }),
+                Message::top_error(42, "Wrong!".to_owned(), None),
                 Message::notification("Alert!".to_owned(), Some(Value::String("blabla".to_owned()))),
                 Message::Unmatched(Value::String(String::new())),
             ])));

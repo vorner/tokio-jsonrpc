@@ -32,6 +32,7 @@ impl Deserialize for Version {
 
 /// An RPC request
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
     jsonrpc: Version,
     pub method: String,
@@ -42,6 +43,7 @@ pub struct Request {
 
 /// An error code
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RPCError {
     pub code: i64,
     pub message: String,
@@ -52,6 +54,7 @@ pub struct RPCError {
 /// A response to RPC
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
+    jsonrpc: Version,
     pub result: Result<Value, RPCError>,
     pub id: Value,
 }
@@ -69,7 +72,10 @@ impl Serialize for Response {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WireResponse {
+    #[allow(dead_code)] // It is actually used to eat and sanity check the deserialized text
+    jsonrpc: Version,
     result: Option<Value>,
     error: Option<RPCError>,
     id: Value,
@@ -92,6 +98,7 @@ impl Deserialize for Response {
             }
         };
         Ok(Response {
+            jsonrpc: Version,
             result: result,
             id: wr.id,
         })
@@ -100,6 +107,7 @@ impl Deserialize for Response {
 
 /// A notification (doesn't expect an answer)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Notification {
     jsonrpc: Version,
     pub method: String,
@@ -152,6 +160,7 @@ impl Message {
     /// The ID is taken from the request.
     pub fn reply(request: &Request, reply: Value) -> Self {
         Message::Response(Response {
+            jsonrpc: Version,
             result: Ok(reply),
             id: request.id.clone(),
         })
@@ -161,6 +170,7 @@ impl Message {
     /// The ID is taken from the request and the error structure is constructed.
     pub fn error(request: &Request, code: i64, message: String, data: Option<Value>) -> Self {
         Message::Response(Response {
+            jsonrpc: Version,
             result: Err(RPCError {
                 code: code,
                 message: message,
@@ -175,6 +185,7 @@ impl Message {
     /// less serious protocol errors.
     pub fn top_error(code: i64, message: String, data: Option<Value>) -> Self {
         Message::Response(Response {
+            jsonrpc: Version,
             result: Err(RPCError {
                 code: code,
                 message: message,
@@ -203,5 +214,119 @@ impl FromStr for Message {
 impl Into<String> for Message {
     fn into(self) -> String {
         ::serde_json::ser::to_string(&self).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// A helper for message_one
+    fn message_one(input: &str, expected: &Message) {
+        let parsed: Message = input.parse().unwrap();
+        assert_eq!(*expected, parsed);
+    }
+
+    /// Test serialization and deserialization of the Message
+    ///
+    /// We first deserialize it from a string. That way we check deserialization works.
+    /// But since serialization doesn't have to produce the exact same result (order, spaces, …),
+    /// we then serialize and deserialize the thing again and check it matches.
+    #[test]
+    fn message_serde() {
+        // A request without parameters
+        message_one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#, &Message::Request(Request {
+            jsonrpc: Version,
+            method: "call".to_owned(),
+            params: None,
+            id: json!(1),
+        }));
+        // A request with parameters
+        message_one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
+            &Message::Request(Request {
+                jsonrpc: Version,
+                method: "call".to_owned(),
+                params: Some(json!([1, 2, 3])),
+                id: json!(2),
+            })
+        );
+        // A notification (with parameters)
+        message_one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
+            &Message::Notification(Notification {
+                jsonrpc: Version,
+                method: "notif".to_owned(),
+                params: Some(json!({"x": "y"})),
+            })
+        );
+        // A successful response
+        message_one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
+            &Message::Response(Response {
+                jsonrpc: Version,
+                result: Ok(json!(42)),
+                id: json!(3),
+            })
+        );
+        // An error
+        message_one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
+            &Message::Response(Response {
+                jsonrpc: Version,
+                result: Err(RPCError {
+                    code: 42,
+                    message: "Wrong!".to_owned(),
+                    data: None,
+                }),
+                id: Value::Null,
+            })
+        );
+        // A batch
+        message_one(r#"[
+                {"jsonrpc": "2.0", "method": "notif"},
+                {"jsonrpc": "2.0", "method": "call", "id": 42}
+            ]"#,
+            &Message::Batch(vec![
+                Message::Notification(Notification {
+                    jsonrpc: Version,
+                    method: "notif".to_owned(),
+                    params: None,
+                }),
+                Message::Request(Request {
+                    jsonrpc: Version,
+                    method: "call".to_owned(),
+                    params: None,
+                    id: json!(42),
+                }),
+            ])
+        );
+    }
+
+    /// A helper for the `broken` test.
+    ///
+    /// Check that the given JSON string parses, but is not recognized as a valid RPC message.
+    fn broken_one(input: &str) {
+        let msg = input.parse().unwrap();
+        match &msg {
+            &Message::Unmatched(_) => (),
+            _ => panic!("{} recognized as an RPC message: {:?}!", input, msg),
+        }
+    }
+
+    /// Test things that are almost but not entirely JSONRPC are rejected
+    ///
+    /// The reject is done by returning it as Unmatched.
+    #[test]
+    fn broken() {
+        // Missing the version
+        broken_one(r#"{"method": "notif"}"#);
+        // Wrong version
+        broken_one(r#"{"jsonrpc": 2.0, "method": "notif"}"#);
+        // A response with both result and error
+        broken_one(r#"{"jsonrpc": "2.0", "result": 42, "error": {"code": 42, "message": "Wrong!"}, "id": 1}"#);
+        // A response without an id
+        broken_one(r#"{"jsonrpc": "2.0", "result": 42}"#);
+        // An extra field
+        broken_one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
+        // Something completely different
+        broken_one(r#"{"x": [1, 2, 3]}"#);
     }
 }
