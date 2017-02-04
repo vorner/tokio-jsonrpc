@@ -8,6 +8,7 @@ use std::str::FromStr;
 use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde::de::{Deserialize, Deserializer, Unexpected, Error};
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Version;
@@ -151,8 +152,7 @@ impl Message {
             jsonrpc: Version,
             method: method,
             params: params,
-            // TODO: Generate the ID.
-            id: Value::Null,
+            id: Value::String(Uuid::new_v4().hyphenated().to_string()),
         })
     }
     /// Answer the request with a (positive) reply.
