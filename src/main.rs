@@ -4,7 +4,7 @@ extern crate futures;
 extern crate tokio_core;
 extern crate serde_json;
 
-use echo_jsonrpc::message::{Message};
+use echo_jsonrpc::message::Message;
 
 use std::io::{Result as IoResult, Error, ErrorKind};
 
@@ -12,7 +12,7 @@ use futures::{Future, Sink, Stream};
 use futures::stream::{once, Once};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
-use tokio_core::io::{Codec,EasyBuf,Io};
+use tokio_core::io::{Codec, EasyBuf, Io};
 use serde_json::Value;
 use serde_json::de::from_slice;
 use serde_json::ser::to_vec;
@@ -52,14 +52,12 @@ fn main() {
     let service = connections.for_each(|(stream, _)| {
         let jsonized = stream.framed(RPCCodec);
         let (w, r) = jsonized.split();
-        let header: Once<_, Error> = once(Ok(Message::Batch(
-            vec![
-                Message::request("Hello".to_owned(), Some(Value::Null)),
-                Message::top_error(42, "Wrong!".to_owned(), None),
-                Message::notification("Alert!".to_owned(), Some(Value::String("blabla".to_owned()))),
-                Message::Unmatched(Value::String(String::new())),
-            ])));
-        let sent = w.send_all(header).and_then(|(sink, _)| sink.send_all(r))
+        let header: Once<_, Error> = once(Ok(Message::Batch(vec![Message::request("Hello".to_owned(), Some(Value::Null)),
+                                                                 Message::top_error(42, "Wrong!".to_owned(), None),
+                                                                 Message::notification("Alert!".to_owned(), Some(Value::String("blabla".to_owned()))),
+                                                                 Message::Unmatched(Value::String(String::new()))])));
+        let sent = w.send_all(header)
+            .and_then(|(sink, _)| sink.send_all(r))
             .map(|_| ())
             .map_err(|_| {
                 // TODO Something with the error ‒ logging?

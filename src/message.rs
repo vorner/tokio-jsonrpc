@@ -75,7 +75,8 @@ impl Serialize for Response {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireResponse {
-    #[allow(dead_code)] // It is actually used to eat and sanity check the deserialized text
+    // It is actually used to eat and sanity check the deserialized text
+    #[allow(dead_code)]
     jsonrpc: Version,
     result: Option<Value>,
     error: Option<RPCError>,
@@ -96,7 +97,7 @@ impl Deserialize for Response {
                 return Err(D::Error::custom("Either 'error' or 'result' is expected, but not both"));
                 // A trick to make the compiler accept this branch
                 unreachable!();
-            }
+            },
         };
         Ok(Response {
             jsonrpc: Version,
@@ -236,55 +237,52 @@ mod tests {
     #[test]
     fn message_serde() {
         // A request without parameters
-        message_one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#, &Message::Request(Request {
-            jsonrpc: Version,
-            method: "call".to_owned(),
-            params: None,
-            id: json!(1),
-        }));
+        message_one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
+                    &Message::Request(Request {
+                        jsonrpc: Version,
+                        method: "call".to_owned(),
+                        params: None,
+                        id: json!(1),
+                    }));
         // A request with parameters
         message_one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
-            &Message::Request(Request {
-                jsonrpc: Version,
-                method: "call".to_owned(),
-                params: Some(json!([1, 2, 3])),
-                id: json!(2),
-            })
-        );
+                    &Message::Request(Request {
+                        jsonrpc: Version,
+                        method: "call".to_owned(),
+                        params: Some(json!([1, 2, 3])),
+                        id: json!(2),
+                    }));
         // A notification (with parameters)
         message_one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
-            &Message::Notification(Notification {
-                jsonrpc: Version,
-                method: "notif".to_owned(),
-                params: Some(json!({"x": "y"})),
-            })
-        );
+                    &Message::Notification(Notification {
+                        jsonrpc: Version,
+                        method: "notif".to_owned(),
+                        params: Some(json!({"x": "y"})),
+                    }));
         // A successful response
         message_one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
-            &Message::Response(Response {
-                jsonrpc: Version,
-                result: Ok(json!(42)),
-                id: json!(3),
-            })
-        );
+                    &Message::Response(Response {
+                        jsonrpc: Version,
+                        result: Ok(json!(42)),
+                        id: json!(3),
+                    }));
         // An error
         message_one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
-            &Message::Response(Response {
-                jsonrpc: Version,
-                result: Err(RPCError {
-                    code: 42,
-                    message: "Wrong!".to_owned(),
-                    data: None,
-                }),
-                id: Value::Null,
-            })
-        );
+                    &Message::Response(Response {
+                        jsonrpc: Version,
+                        result: Err(RPCError {
+                            code: 42,
+                            message: "Wrong!".to_owned(),
+                            data: None,
+                        }),
+                        id: Value::Null,
+                    }));
         // A batch
         message_one(r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
                 {"jsonrpc": "2.0", "method": "call", "id": 42}
             ]"#,
-            &Message::Batch(vec![
+                    &Message::Batch(vec![
                 Message::Notification(Notification {
                     jsonrpc: Version,
                     method: "notif".to_owned(),
@@ -296,8 +294,7 @@ mod tests {
                     params: None,
                     id: json!(42),
                 }),
-            ])
-        );
+            ]));
     }
 
     /// A helper for the `broken` test.

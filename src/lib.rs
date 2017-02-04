@@ -1,5 +1,6 @@
 extern crate serde;
-#[allow(unused_imports)] // We use the json! macro only in the tests
+// We use the json! macro only in the tests
+#[allow(unused_imports)]
 #[macro_use]
 extern crate serde_json;
 #[macro_use]
