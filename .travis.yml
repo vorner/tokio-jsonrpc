@@ -9,14 +9,16 @@ os:
     - osx
 before_script:
     - |
-      (cargo install rustfmt || true) &&
-      (cargo install clippy || true)
+      (travis_wait cargo install rustfmt || true) &&
+      (travis_wait cargo install clippy || true)
 
 script:
     - |
       export PATH="$PATH":~/.cargo/bin &&
-      cargo build --verbose &&
-      cargo test --verbose &&
+      export RUST_BACKTRACE=1 &&
+      export CARGO_INCREMENTAL=1 &&
+      cargo build &&
+      cargo test &&
       cargo doc --no-deps &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo clippy -- --deny clippy) &&
       cargo fmt

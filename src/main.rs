@@ -53,7 +53,7 @@ fn main() {
         let jsonized = stream.framed(RPCCodec);
         let (w, r) = jsonized.split();
         let header: Once<_, Error> = once(Ok(Message::Batch(vec![Message::request("Hello".to_owned(), Some(Value::Null)),
-                                                                 Message::top_error(42, "Wrong!".to_owned(), None),
+                                                                 Message::Unmatched(Value::Null).error(42, "Wrong!".to_owned(), None),
                                                                  Message::notification("Alert!".to_owned(), Some(Value::String("blabla".to_owned()))),
                                                                  Message::Unmatched(Value::String(String::new()))])));
         let sent = w.send_all(header)

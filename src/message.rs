@@ -159,32 +159,35 @@ impl Message {
     /// Answer the request with a (positive) reply.
     ///
     /// The ID is taken from the request.
-    pub fn reply(request: &Request, reply: Value) -> Self {
-        Message::Response(Response {
-            jsonrpc: Version,
-            result: Ok(reply),
-            id: request.id.clone(),
-        })
+    ///
+    /// # Panics
+    ///
+    /// Panics if something else than request is passed in.
+    pub fn reply(&self, reply: Value) -> Self {
+        if let Message::Request(Request { ref id, .. }) = *self {
+            Message::Response(Response {
+                jsonrpc: Version,
+                result: Ok(reply),
+                id: id.clone(),
+            })
+        } else {
+            panic!("A request was expected, received {:?}", self);
+        }
     }
     /// Answer the request with an error.
     ///
     /// The ID is taken from the request and the error structure is constructed.
-    pub fn error(request: &Request, code: i64, message: String, data: Option<Value>) -> Self {
-        Message::Response(Response {
-            jsonrpc: Version,
-            result: Err(RPCError {
-                code: code,
-                message: message,
-                data: data,
-            }),
-            id: request.id.clone(),
-        })
-    }
-    /// Create an error without a request.
+    /// If Unmatched is passed, the id is set to null. Other things can't generate an error.
     ///
-    /// Create a top-level/free-standing error (one without an ID). This is the required answer for
-    /// less serious protocol errors.
-    pub fn top_error(code: i64, message: String, data: Option<Value>) -> Self {
+    /// # Panics
+    ///
+    /// Panics if something else than request or unmatched is passed in.
+    pub fn error(&self, code: i64, message: String, data: Option<Value>) -> Self {
+        let id = match *self {
+            Message::Request(Request { ref id, .. }) => id.clone(),
+            Message::Unmatched(_) => Value::Null,
+            _ => panic!("A request or unmatched was expected, received {:?}", self),
+        };
         Message::Response(Response {
             jsonrpc: Version,
             result: Err(RPCError {
@@ -192,7 +195,7 @@ impl Message {
                 message: message,
                 data: data,
             }),
-            id: Value::Null,
+            id: id,
         })
     }
     /// A constructor for a notification.
@@ -325,5 +328,64 @@ mod tests {
         broken_one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
         // Something completely different
         broken_one(r#"{"x": [1, 2, 3]}"#);
+    }
+
+    /// Test some non-trivial aspects of the constructors
+    ///
+    /// This doesn't have a full coverage, because there's not much to actually test there.
+    /// Most of it is related to the ids.
+    #[test]
+    fn constructors() {
+        let msg1 = Message::request("call".to_owned(), Some(json!([1, 2, 3])));
+        let msg2 = Message::request("call".to_owned(), Some(json!([1, 2, 3])));
+        // They differ, even when created with the same parameters
+        assert_ne!(msg1, msg2);
+        // And, specifically, they differ in the ID's
+        let (id1, id2) = if let (&Message::Request(ref req1), &Message::Request(ref req2)) = (&msg1, &msg2) {
+            assert_ne!(req1.id, req2.id);
+            assert!(req1.id.is_string());
+            assert!(req2.id.is_string());
+            (&req1.id, &req2.id)
+        } else {
+            panic!("Non-request received");
+        };
+        // When we answer a message, we get the same ID
+        if let Message::Response(ref resp) = msg1.reply(json!([1, 2, 3])) {
+            assert_eq!(*resp, Response {
+                jsonrpc: Version,
+                result: Ok(json!([1, 2, 3])),
+                id: id1.clone(),
+            });
+        } else {
+            panic!("Not a response");
+        }
+        // The same with an error
+        if let Message::Response(ref resp) = msg2.error(42, "Wrong!".to_owned(), None) {
+            assert_eq!(*resp, Response {
+                jsonrpc: Version,
+                result: Err(RPCError {
+                    code: 42,
+                    message: "Wrong!".to_owned(),
+                    data: None,
+                }),
+                id: id2.clone(),
+            });
+        } else {
+            panic!("Not a response");
+        }
+        // When we have unmatched, we generate a top-level error with Null id.
+        if let Message::Response(ref resp) = Message::Unmatched(Value::Null).error(43, "Also wrong!".to_owned(), None) {
+            assert_eq!(*resp, Response {
+                jsonrpc: Version,
+                result: Err(RPCError {
+                    code: 43,
+                    message: "Also wrong!".to_owned(),
+                    data: None,
+                }),
+                id: Value::Null,
+            });
+        } else {
+            panic!("Not a response");
+        }
     }
 }

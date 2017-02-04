@@ -7,3 +7,5 @@ extern crate serde_derive;
 extern crate uuid;
 
 pub mod message;
+
+pub use message::Message;
