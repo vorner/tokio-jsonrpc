@@ -1,0 +1,26 @@
+language: rust
+cache: cargo
+rust:
+    - stable
+    - beta
+    - nightly
+os:
+    - linux
+    - osx
+before_script:
+    - |
+      (cargo install rustfmt || true) &&
+      (cargo install clippy || true)
+
+script:
+    - |
+      export PATH="$PATH":~/.cargo/bin &&
+      cargo build --verbose &&
+      cargo test --verbose &&
+      cargo doc --no-deps &&
+      (test "$TRAVIS_RUST_VERSION" != nightly || cargo clippy -- --deny clippy) &&
+      cargo fmt
+
+matrix:
+    allow_failures:
+        - rust: nightly
