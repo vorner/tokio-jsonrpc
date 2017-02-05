@@ -137,6 +137,7 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
+// TODO: SyntaxError variant?
 /// One message of the JSON RPC protocol
 ///
 /// One message, directly mapped from the structures of the protocol. See the

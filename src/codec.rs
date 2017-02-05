@@ -18,7 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! The codec to encode and decode messages from a stream of bytes.
+//! The codecs to encode and decode messages from a stream of bytes.
+
+// TODO: Have both line-separated and object separated codecs. The first can detect syntax errors,
+// while the other can decode multiline messages or messages on single line.
 
 use std::io::{Result as IoResult, Error, ErrorKind};
 
