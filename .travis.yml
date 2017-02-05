@@ -12,11 +12,11 @@ before_script:
       (travis_wait cargo install rustfmt || true) &&
       (travis_wait cargo install clippy || true)
 
+# TODO: Once the incremental build works well, reintroduce it
 script:
     - |
       export PATH="$PATH":~/.cargo/bin &&
       export RUST_BACKTRACE=1 &&
-      export CARGO_INCREMENTAL=1 &&
       cargo build &&
       cargo test &&
       cargo doc --no-deps &&
