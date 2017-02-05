@@ -226,12 +226,6 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    /// A helper for message_one
-    fn message_one(input: &str, expected: &Message) {
-        let parsed: Message = input.parse().unwrap();
-        assert_eq!(*expected, parsed);
-    }
-
     /// Test serialization and deserialization of the Message
     ///
     /// We first deserialize it from a string. That way we check deserialization works.
@@ -239,53 +233,59 @@ mod tests {
     /// we then serialize and deserialize the thing again and check it matches.
     #[test]
     fn message_serde() {
+        // A helper for running one message test
+        fn one(input: &str, expected: &Message) {
+            let parsed: Message = input.parse().unwrap();
+            assert_eq!(*expected, parsed);
+        }
+
         // A request without parameters
-        message_one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
-                    &Message::Request(Request {
-                        jsonrpc: Version,
-                        method: "call".to_owned(),
-                        params: None,
-                        id: json!(1),
-                    }));
+        one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
+            &Message::Request(Request {
+                jsonrpc: Version,
+                method: "call".to_owned(),
+                params: None,
+                id: json!(1),
+            }));
         // A request with parameters
-        message_one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
-                    &Message::Request(Request {
-                        jsonrpc: Version,
-                        method: "call".to_owned(),
-                        params: Some(json!([1, 2, 3])),
-                        id: json!(2),
-                    }));
+        one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
+            &Message::Request(Request {
+                jsonrpc: Version,
+                method: "call".to_owned(),
+                params: Some(json!([1, 2, 3])),
+                id: json!(2),
+            }));
         // A notification (with parameters)
-        message_one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
-                    &Message::Notification(Notification {
-                        jsonrpc: Version,
-                        method: "notif".to_owned(),
-                        params: Some(json!({"x": "y"})),
-                    }));
+        one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
+            &Message::Notification(Notification {
+                jsonrpc: Version,
+                method: "notif".to_owned(),
+                params: Some(json!({"x": "y"})),
+            }));
         // A successful response
-        message_one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
-                    &Message::Response(Response {
-                        jsonrpc: Version,
-                        result: Ok(json!(42)),
-                        id: json!(3),
-                    }));
+        one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
+            &Message::Response(Response {
+                jsonrpc: Version,
+                result: Ok(json!(42)),
+                id: json!(3),
+            }));
         // An error
-        message_one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
-                    &Message::Response(Response {
-                        jsonrpc: Version,
-                        result: Err(RPCError {
-                            code: 42,
-                            message: "Wrong!".to_owned(),
-                            data: None,
-                        }),
-                        id: Value::Null,
-                    }));
+        one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
+            &Message::Response(Response {
+                jsonrpc: Version,
+                result: Err(RPCError {
+                    code: 42,
+                    message: "Wrong!".to_owned(),
+                    data: None,
+                }),
+                id: Value::Null,
+            }));
         // A batch
-        message_one(r#"[
+        one(r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
                 {"jsonrpc": "2.0", "method": "call", "id": 42}
             ]"#,
-                    &Message::Batch(vec![
+            &Message::Batch(vec![
                 Message::Notification(Notification {
                     jsonrpc: Version,
                     method: "notif".to_owned(),
@@ -303,31 +303,33 @@ mod tests {
     /// A helper for the `broken` test.
     ///
     /// Check that the given JSON string parses, but is not recognized as a valid RPC message.
-    fn broken_one(input: &str) {
-        let msg = input.parse().unwrap();
-        match &msg {
-            &Message::Unmatched(_) => (),
-            _ => panic!("{} recognized as an RPC message: {:?}!", input, msg),
-        }
-    }
 
     /// Test things that are almost but not entirely JSONRPC are rejected
     ///
     /// The reject is done by returning it as Unmatched.
     #[test]
     fn broken() {
+        // A helper with one test
+        fn one(input: &str) {
+            let msg = input.parse().unwrap();
+            match &msg {
+                &Message::Unmatched(_) => (),
+                _ => panic!("{} recognized as an RPC message: {:?}!", input, msg),
+            }
+        }
+
         // Missing the version
-        broken_one(r#"{"method": "notif"}"#);
+        one(r#"{"method": "notif"}"#);
         // Wrong version
-        broken_one(r#"{"jsonrpc": 2.0, "method": "notif"}"#);
+        one(r#"{"jsonrpc": 2.0, "method": "notif"}"#);
         // A response with both result and error
-        broken_one(r#"{"jsonrpc": "2.0", "result": 42, "error": {"code": 42, "message": "Wrong!"}, "id": 1}"#);
+        one(r#"{"jsonrpc": "2.0", "result": 42, "error": {"code": 42, "message": "Wrong!"}, "id": 1}"#);
         // A response without an id
-        broken_one(r#"{"jsonrpc": "2.0", "result": 42}"#);
+        one(r#"{"jsonrpc": "2.0", "result": 42}"#);
         // An extra field
-        broken_one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
+        one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
         // Something completely different
-        broken_one(r#"{"x": [1, 2, 3]}"#);
+        one(r#"{"x": [1, 2, 3]}"#);
     }
 
     /// Test some non-trivial aspects of the constructors
