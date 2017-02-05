@@ -1,5 +1,5 @@
 [package]
-name = "echo-jsonrpc"
+name = "tokio-jsonrpc"
 version = "0.1.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 
@@ -14,7 +14,7 @@ uuid = { version = "0.2", features = ["v4"] }
 [lib]
 
 [[bin]]
-name = "echo_jsonrpc"
+name = "tokio-jsonrpc"
 doc = false
 
 [profile.dev]
