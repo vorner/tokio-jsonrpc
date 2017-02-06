@@ -82,12 +82,13 @@ pub struct Response {
 
 impl Serialize for Response {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut sub = serializer.serialize_struct("Response", 2)?;
-        sub.serialize_field("id", &self.id)?;
+        let mut sub = serializer.serialize_struct("Response", 3)?;
+        sub.serialize_field("jsonrpc", &self.jsonrpc)?;
         match self.result {
             Ok(ref value) => sub.serialize_field("result", value),
             Err(ref err) => sub.serialize_field("error", err),
         }?;
+        sub.serialize_field("id", &self.id)?;
         sub.end()
     }
 }
@@ -155,6 +156,9 @@ pub struct Notification {
 /// The `Batch` variant is supposed to be created directly, without a constructor. The `Unmatched`
 /// is something you may get from parsing but it is not expected you'd need to create it (though it
 /// can be created directly as well).
+///
+/// The `Unmatched` and `SyntaxError` may be part of what gets out of decoding. It is not something
+/// to be serialized.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -162,7 +166,9 @@ pub enum Message {
     Response(Response),
     Notification(Notification),
     Batch(Vec<Message>),
+    // TODO: Disable serialization of these?
     Unmatched(Value),
+    SyntaxError,
 }
 
 impl Message {
@@ -198,16 +204,17 @@ impl Message {
     /// Answer the request with an error.
     ///
     /// The ID is taken from the request and the error structure is constructed.
-    /// If Unmatched is passed, the id is set to null. Other things can't generate an error.
+    /// If `Unmatched` or `SyntaxError` is passed, the id is set to null. Other things can't
+    /// generate an error.
     ///
     /// # Panics
     ///
-    /// Panics if something else than request or unmatched is passed in.
+    /// Panics if something else than `Request`, `Unmatched` or `SyntaxError` is passed in.
     pub fn error(&self, code: i64, message: String, data: Option<Value>) -> Self {
         let id = match *self {
             Message::Request(Request { ref id, .. }) => id.clone(),
-            Message::Unmatched(_) => Value::Null,
-            _ => panic!("A request or unmatched was expected, received {:?}", self),
+            Message::Unmatched(_) | Message::SyntaxError => Value::Null,
+            _ => panic!("A Request, Unmatched or SyntaxError was expected, received {:?}", self),
         };
         Message::Response(Response {
             jsonrpc: Version,

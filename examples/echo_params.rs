@@ -61,6 +61,7 @@ fn main() {
                     None
                 },
                 Message::Unmatched(_) => Some(message.error(-32600, "Not JSONRPC".to_owned(), None)),
+                Message::SyntaxError => Some(message.error(-32700, "Syntax Error".to_owned(), None)),
                 _ => None,
             }
         });

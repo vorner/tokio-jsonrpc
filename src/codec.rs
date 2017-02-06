@@ -24,6 +24,7 @@
 // while the other can decode multiline messages or messages on single line.
 
 use std::io::{Result as IoResult, Error, ErrorKind};
+use std::error::Error as ErrorTrait;
 
 use tokio_core::io::{Codec as TokioCodec, EasyBuf};
 use serde_json::de::from_slice;
@@ -55,7 +56,12 @@ impl TokioCodec for Codec {
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             let line = buf.drain_to(i);
             buf.drain_to(1);
-            from_slice(line.as_slice()).map(Some).map_err(err_map)
+            match from_slice(line.as_slice()) {
+                Ok(message) => Ok(Some(message)),
+                // TODO: Describe the hack
+                Err(ref e) if e.cause().is_none() => Ok(Some(Message::SyntaxError)),
+                Err(e) => Err(err_map(e)),
+            }
         } else {
             Ok(None)
         }
@@ -111,6 +117,6 @@ mod tests {
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
-        assert!(one(b"{]\n", b"").is_err());
+        assert_eq!(one(b"{]\n", b"").unwrap(), Some(Message::SyntaxError));
     }
 }
