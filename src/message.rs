@@ -24,6 +24,7 @@
 //! blocks and you should generally work with `Message` instead.
 
 use std::str::FromStr;
+use std::error::Error as ErrorTrait;
 
 use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde::de::{Deserialize, Deserializer, Unexpected, Error};
@@ -146,6 +147,9 @@ pub struct Notification {
 /// Since the protocol allows one endpoint to be both client and server at the same time, the
 /// message can decode and encode both directions of the protocol.
 ///
+/// The message also encodes protocol-level errors, through the `Unmatched` and `SyntaxError`
+/// variants. A `Result` isn't used because we can't put methods on it.
+///
 /// The `Unmatched` variant is for cases when the message that arrived is valid JSON, but doesn't
 /// match the protocol. It allows for handling these non-fatal errors on higher level than the
 /// parser.
@@ -157,7 +161,8 @@ pub struct Notification {
 /// can be created directly as well).
 ///
 /// The `Unmatched` and `SyntaxError` may be part of what gets out of decoding. It is not something
-/// to be serialized (serialization of them fails).
+/// to be serialized (serialization of them fails). Note that it isn't produced directly by
+/// deserialization, only from the [Line](../codec/struct.Line.html) codec and `parse`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -240,7 +245,13 @@ impl Message {
 impl FromStr for Message {
     type Err = ::serde_json::error::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        ::serde_json::de::from_str(s)
+        match ::serde_json::de::from_str(s) {
+            Ok(message) => Ok(message),
+            // A hack to recognize syntax errors, before https://github.com/serde-rs/json/issues/245
+            // is done.
+            Err(ref e) if e.cause().is_none() => Ok(Message::SyntaxError),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -366,6 +377,8 @@ mod tests {
         one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
         // Something completely different
         one(r#"{"x": [1, 2, 3]}"#);
+
+        assert_eq!(r#"{]"#.parse::<Message>().unwrap(), Message::SyntaxError);
     }
 
     /// Test some non-trivial aspects of the constructors

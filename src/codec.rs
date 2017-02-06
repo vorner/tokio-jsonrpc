@@ -59,7 +59,8 @@ impl Codec for Line {
             buf.drain_to(1);
             match from_slice(line.as_slice()) {
                 Ok(message) => Ok(Some(message)),
-                // TODO: Describe the hack
+                // A hack to recognize syntax errors, before https://github.com/serde-rs/json/issues/245
+                // is done.
                 Err(ref e) if e.cause().is_none() => Ok(Some(Message::SyntaxError)),
                 Err(e) => Err(err_map(e)),
             }
