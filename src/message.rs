@@ -138,7 +138,6 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
-// TODO: SyntaxError variant?
 /// One message of the JSON RPC protocol
 ///
 /// One message, directly mapped from the structures of the protocol. See the
@@ -158,7 +157,7 @@ pub struct Notification {
 /// can be created directly as well).
 ///
 /// The `Unmatched` and `SyntaxError` may be part of what gets out of decoding. It is not something
-/// to be serialized.
+/// to be serialized (serialization of them fails).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -166,8 +165,9 @@ pub enum Message {
     Response(Response),
     Notification(Notification),
     Batch(Vec<Message>),
-    // TODO: Disable serialization of these?
+    #[serde(skip_serializing)]
     Unmatched(Value),
+    #[serde(skip_serializing, skip_deserializing)]
     SyntaxError,
 }
 
@@ -254,6 +254,8 @@ impl Into<String> for Message {
 mod tests {
     use super::*;
     use serde_json::Value;
+    use serde_json::ser::to_vec;
+    use serde_json::de::from_slice;
 
     /// Test serialization and deserialization of the Message
     ///
@@ -266,6 +268,9 @@ mod tests {
         fn one(input: &str, expected: &Message) {
             let parsed: Message = input.parse().unwrap();
             assert_eq!(*expected, parsed);
+            let serialized = to_vec(&parsed).unwrap();
+            let deserialized: Message = from_slice(&serialized).unwrap();
+            assert_eq!(parsed, deserialized);
         }
 
         // A request without parameters
@@ -327,6 +332,8 @@ mod tests {
                     id: json!(42),
                 }),
             ]));
+        assert!(to_vec(&Message::Unmatched(Value::Null)).is_err());
+        assert!(to_vec(&Message::SyntaxError).is_err());
     }
 
     /// A helper for the `broken` test.
