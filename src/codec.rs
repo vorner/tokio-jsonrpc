@@ -19,6 +19,12 @@
 // SOFTWARE.
 
 //! The codecs to encode and decode messages from a stream of bytes.
+//!
+//! You can choose to use either line separated one ([Line](struct.Line.html)) or
+//! boundary separated one ([Boundary](struct.Boundary.html)). The first one needs the
+//! messages to be separated by newlines and not to contain newlines in their representation. On
+//! the other hand, it can recover from syntax error in a message and respond with an error instead
+//! of terminating the connection.
 
 // TODO: Have both line-separated and object separated codecs. The first can detect syntax errors,
 // while the other can decode multiline messages or messages on single line.
@@ -26,7 +32,7 @@
 use std::io::{Result as IoResult, Error, ErrorKind};
 use std::error::Error as ErrorTrait;
 
-use tokio_core::io::{Codec as TokioCodec, EasyBuf};
+use tokio_core::io::{Codec, EasyBuf};
 use serde_json::de::from_slice;
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
@@ -40,19 +46,14 @@ fn err_map(e: SerdeError) -> Error {
 
 /// A codec working with JSONRPC 2.0 messages.
 ///
-/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object boundaries,
-/// so it works with both newline-separated and object-separated encoding. It produces
-/// newline-separated stream, which is more generic.
-pub struct Codec;
+/// This produces or encodes [Message](../message/enum.Message.hmtl). It separates the records by
+/// newlines, so it can recover from syntax error.s
+pub struct Line;
 
-impl TokioCodec for Codec {
+impl Codec for Line {
     type In = Message;
     type Out = Message;
     fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Message>> {
-        // TODO: Use object boundary instead of newlines. This waits for
-        // https://github.com/serde-rs/json/pull/212 or for being able to
-        // distinguish EOF errors from the others for the trick in
-        // https://github.com/serde-rs/json/issues/183.
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             let line = buf.drain_to(i);
             buf.drain_to(1);
@@ -73,6 +74,15 @@ impl TokioCodec for Codec {
     }
 }
 
+/// A codec working with JSONRPC 2.0 messages.
+///
+/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object boundaries,
+/// so it works with both newline-separated and object-separated encoding. It produces
+/// newline-separated stream, which is more generic.
+///
+/// TODO: This is not implemented yet.
+pub struct Boundary;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,7 +90,7 @@ mod tests {
     #[test]
     fn encode() {
         let mut output = Vec::new();
-        let mut codec = Codec;
+        let mut codec = Line;
         codec.encode(Message::notification("notif".to_owned(), None), &mut output).unwrap();
         assert_eq!(Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]), output);
     }
@@ -88,7 +98,7 @@ mod tests {
     #[test]
     fn decode() {
         fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Message>> {
-            let mut codec = Codec;
+            let mut codec = Line;
             let mut buf = EasyBuf::new();
             buf.get_mut().extend_from_slice(input);
             let result = codec.decode(&mut buf);

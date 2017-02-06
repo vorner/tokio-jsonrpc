@@ -213,7 +213,8 @@ impl Message {
     pub fn error(&self, code: i64, message: String, data: Option<Value>) -> Self {
         let id = match *self {
             Message::Request(Request { ref id, .. }) => id.clone(),
-            Message::Unmatched(_) | Message::SyntaxError => Value::Null,
+            Message::Unmatched(_) |
+            Message::SyntaxError => Value::Null,
             _ => panic!("A Request, Unmatched or SyntaxError was expected, received {:?}", self),
         };
         Message::Response(Response {

@@ -24,7 +24,7 @@ extern crate futures;
 extern crate tokio_core;
 extern crate serde_json;
 
-use tokio_jsonrpc::{Message, Codec};
+use tokio_jsonrpc::{Message, LineCodec};
 
 use std::io::Error;
 
@@ -42,7 +42,7 @@ fn main() {
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
     let connections = listener.incoming();
     let service = connections.for_each(|(stream, _)| {
-        let jsonized = stream.framed(Codec);
+        let jsonized = stream.framed(LineCodec);
         let (w, r) = jsonized.split();
         let header: Once<_, Error> = once(Ok(Message::Batch(vec![Message::request("Hello".to_owned(), Some(Value::Null)),
                                                                  Message::Unmatched(Value::Null).error(42, "Wrong!".to_owned(), None),

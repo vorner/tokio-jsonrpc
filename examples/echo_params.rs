@@ -27,7 +27,7 @@ extern crate serde_json;
 extern crate futures;
 extern crate tokio_core;
 
-use tokio_jsonrpc::{Message, Codec};
+use tokio_jsonrpc::{Message, LineCodec};
 use tokio_jsonrpc::message::{Request, Notification};
 
 use futures::{Future, Sink, Stream};
@@ -42,7 +42,7 @@ fn main() {
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
     let connections = listener.incoming();
     let service = connections.for_each(|(stream, _)| {
-        let jsonized = stream.framed(Codec);
+        let jsonized = stream.framed(LineCodec);
         let (w, r) = jsonized.split();
         let answers = r.filter_map(|message| {
             // TODO: We probably want some more convenient handling, like more handy methods on
