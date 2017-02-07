@@ -28,7 +28,7 @@ extern crate futures;
 extern crate tokio_core;
 
 use tokio_jsonrpc::{Message, LineCodec};
-use tokio_jsonrpc::message::Notification;
+use tokio_jsonrpc::message::{Notification, Broken};
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
@@ -49,7 +49,7 @@ fn main() {
             // TODO: We probably want some more convenient handling, like more handy methods on
             // Message.
             match message {
-                Message::Request(ref req) => {
+                Ok(Message::Request(ref req)) => {
                     println!("Got method {}", req.method);
                     if req.method == "echo" {
                         Some(req.reply(json!([req.method, req.params])))
@@ -57,12 +57,12 @@ fn main() {
                         Some(req.error(-32601, format!("Unknown method {}", req.method), None))
                     }
                 },
-                Message::Notification(Notification { ref method, .. }) => {
+                Ok(Message::Notification(Notification { ref method, .. })) => {
                     println!("Got notification {}", method);
                     None
                 },
-                Message::Unmatched(_) => Some(message.error(-32600, "Not a JSONRPC message".to_owned(), None)),
-                Message::SyntaxError(ref e) => Some(message.error(-32700, e.to_owned(), None)),
+                Err(Broken::Unmatched(_)) => Some(Message::error(-32600, "Not a JSONRPC message".to_owned(), None)),
+                Err(Broken::SyntaxError(ref e)) => Some(Message::error(-32700, e.to_owned(), None)),
                 _ => None,
             }
         });

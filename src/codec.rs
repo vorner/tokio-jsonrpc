@@ -23,21 +23,16 @@
 //! You can choose to use either line separated one ([Line](struct.Line.html)) or
 //! boundary separated one ([Boundary](struct.Boundary.html)). The first one needs the
 //! messages to be separated by newlines and not to contain newlines in their representation. On
-//! the other hand, it can recover from syntax error in a message and respond with an error instead
-//! of terminating the connection.
-
-// TODO: Have both line-separated and object separated codecs. The first can detect syntax errors,
-// while the other can decode multiline messages or messages on single line.
+//! the other hand, it can recover from syntax error in a message and you can respond with an error
+//! instead of terminating the connection.
 
 use std::io::{Result as IoResult, Error, ErrorKind};
-use std::error::Error as ErrorTrait;
 
 use tokio_core::io::{Codec, EasyBuf};
-use serde_json::de::from_slice;
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
-use message::Message;
+use message::{Message, Parsed, from_slice};
 
 /// A helper to wrap the error
 fn err_map(e: SerdeError) -> Error {
@@ -48,22 +43,19 @@ fn err_map(e: SerdeError) -> Error {
 ///
 /// This produces or encodes [Message](../message/enum.Message.hmtl). It separates the records by
 /// newlines, so it can recover from syntax error.s
+///
+/// Note that the produced items is a `Result`, to allow not terminating the stream on
+/// protocol-level errors.
 pub struct Line;
 
 impl Codec for Line {
-    type In = Message;
+    type In = Parsed;
     type Out = Message;
-    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Message>> {
+    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             let line = buf.drain_to(i);
             buf.drain_to(1);
-            match from_slice(line.as_slice()) {
-                Ok(message) => Ok(Some(message)),
-                // A hack to recognize syntax errors, before https://github.com/serde-rs/json/issues/245
-                // is done.
-                Err(ref e) if e.cause().is_none() => Ok(Some(Message::SyntaxError(format!("{}", e)))),
-                Err(e) => Err(err_map(e)),
-            }
+            Ok(Some(from_slice(line.as_slice())))
         } else {
             Ok(None)
         }
@@ -87,6 +79,7 @@ pub struct Boundary;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use message::Broken;
 
     #[test]
     fn encode() {
@@ -98,7 +91,7 @@ mod tests {
 
     #[test]
     fn decode() {
-        fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Message>> {
+        fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Parsed>> {
             let mut codec = Line;
             let mut buf = EasyBuf::new();
             buf.get_mut().extend_from_slice(input);
@@ -107,29 +100,24 @@ mod tests {
             result
         }
 
-        // TODO: We currently have to terminate the records by newline, but that's a temporary
-        // problem. Once that is solved, have some tests without the newline as well. Also, test
-        // some messages that don't have a newline, but have a syntax error, so we know we abort
-        // soon enough.
-
         let notif = Message::notification("notif".to_owned(), None);
         let msgstring = Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]);
         // A single message, nothing is left
-        assert_eq!(one(&msgstring, b"").unwrap(), Some(notif.clone()));
+        assert_eq!(one(&msgstring, b"").unwrap(), Some(Ok(notif.clone())));
         // The first message is decoded, the second stays in the buffer
         let mut twomsgs = msgstring.clone();
         twomsgs.extend_from_slice(&msgstring);
-        assert_eq!(one(&twomsgs, &msgstring).unwrap(), Some(notif.clone()));
+        assert_eq!(one(&twomsgs, &msgstring).unwrap(), Some(Ok(notif.clone())));
         // The second message is incomplete, but stays there
         let incomplete = Vec::from(&br#"{"jsonrpc": "2.0", "method":""#[..]);
         let mut oneandhalf = msgstring.clone();
         oneandhalf.extend_from_slice(&incomplete);
-        assert_eq!(one(&oneandhalf, &incomplete).unwrap(), Some(notif.clone()));
+        assert_eq!(one(&oneandhalf, &incomplete).unwrap(), Some(Ok(notif.clone())));
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
         match one(b"{]\n", b"") {
-            Ok(Some(Message::SyntaxError(_))) => (),
+            Ok(Some(Err(Broken::SyntaxError(_)))) => (),
             other => panic!("Something unexpected: {:?}", other),
         };
     }
