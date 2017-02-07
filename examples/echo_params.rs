@@ -28,7 +28,7 @@ extern crate futures;
 extern crate tokio_core;
 
 use tokio_jsonrpc::{Message, LineCodec};
-use tokio_jsonrpc::message::{Request, Notification};
+use tokio_jsonrpc::message::Notification;
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
@@ -49,12 +49,12 @@ fn main() {
             // TODO: We probably want some more convenient handling, like more handy methods on
             // Message.
             match message {
-                Message::Request(Request { ref method, ref params, .. }) => {
-                    println!("Got method {}", method);
-                    if method == "echo" {
-                        Some(message.reply(json!([method, params])))
+                Message::Request(ref req) => {
+                    println!("Got method {}", req.method);
+                    if req.method == "echo" {
+                        Some(req.reply(json!([req.method, req.params])))
                     } else {
-                        Some(message.error(-32601, format!("Unknown method {}", method), None))
+                        Some(req.error(-32601, format!("Unknown method {}", req.method), None))
                     }
                 },
                 Message::Notification(Notification { ref method, .. }) => {

@@ -63,6 +63,33 @@ pub struct Request {
     pub id: Value,
 }
 
+impl Request {
+    /// Answer the request with a (positive) reply.
+    ///
+    /// The ID is taken from the request.
+    pub fn reply(&self, reply: Value) -> Message {
+        Message::Response(Response {
+            jsonrpc: Version,
+            result: Ok(reply),
+            id: self.id.clone(),
+        })
+    }
+    /// Answer the request with an error.
+    ///
+    /// The ID is taken from the request and the error structure is constructed.
+    pub fn error(&self, code: i64, message: String, data: Option<Value>) -> Message {
+        Message::Response(Response {
+            jsonrpc: Version,
+            result: Err(RPCError {
+                code: code,
+                message: message,
+                data: data,
+            }),
+            id: self.id.clone(),
+        })
+    }
+}
+
 /// An error code
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -187,24 +214,6 @@ impl Message {
             params: params,
             id: Value::String(Uuid::new_v4().hyphenated().to_string()),
         })
-    }
-    /// Answer the request with a (positive) reply.
-    ///
-    /// The ID is taken from the request.
-    ///
-    /// # Panics
-    ///
-    /// Panics if something else than request is passed in.
-    pub fn reply(&self, reply: Value) -> Self {
-        if let Message::Request(Request { ref id, .. }) = *self {
-            Message::Response(Response {
-                jsonrpc: Version,
-                result: Ok(reply),
-                id: id.clone(),
-            })
-        } else {
-            panic!("A request was expected, received {:?}", self);
-        }
     }
     /// Answer the request with an error.
     ///
@@ -395,26 +404,28 @@ mod tests {
         // They differ, even when created with the same parameters
         assert_ne!(msg1, msg2);
         // And, specifically, they differ in the ID's
-        let (id1, id2) = if let (&Message::Request(ref req1), &Message::Request(ref req2)) = (&msg1, &msg2) {
+        let (req1, req2) = if let (Message::Request(req1), Message::Request(req2)) = (msg1, msg2) {
             assert_ne!(req1.id, req2.id);
             assert!(req1.id.is_string());
             assert!(req2.id.is_string());
-            (&req1.id, &req2.id)
+            (req1, req2)
         } else {
             panic!("Non-request received");
         };
+        let id1 = req1.id.clone();
         // When we answer a message, we get the same ID
-        if let Message::Response(ref resp) = msg1.reply(json!([1, 2, 3])) {
+        if let Message::Response(ref resp) = req1.reply(json!([1, 2, 3])) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
                 result: Ok(json!([1, 2, 3])),
-                id: id1.clone(),
+                id: id1,
             });
         } else {
             panic!("Not a response");
         }
+        let id2 = req2.id.clone();
         // The same with an error
-        if let Message::Response(ref resp) = msg2.error(42, "Wrong!".to_owned(), None) {
+        if let Message::Response(ref resp) = req2.error(42, "Wrong!".to_owned(), None) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
                 result: Err(RPCError {
@@ -422,7 +433,7 @@ mod tests {
                     message: "Wrong!".to_owned(),
                     data: None,
                 }),
-                id: id2.clone(),
+                id: id2,
             });
         } else {
             panic!("Not a response");
