@@ -45,6 +45,7 @@ fn main() {
         let jsonized = stream.framed(LineCodec);
         let (w, r) = jsonized.split();
         let answers = r.filter_map(|message| {
+            println!("A message received: {:?}", message);
             // TODO: We probably want some more convenient handling, like more handy methods on
             // Message.
             match message {
@@ -53,15 +54,15 @@ fn main() {
                     if method == "echo" {
                         Some(message.reply(json!([method, params])))
                     } else {
-                        Some(message.error(-32601, "Unknown method".to_owned(), None))
+                        Some(message.error(-32601, format!("Unknown method {}", method), None))
                     }
                 },
                 Message::Notification(Notification { ref method, .. }) => {
                     println!("Got notification {}", method);
                     None
                 },
-                Message::Unmatched(_) => Some(message.error(-32600, "Not JSONRPC".to_owned(), None)),
-                Message::SyntaxError => Some(message.error(-32700, "Syntax Error".to_owned(), None)),
+                Message::Unmatched(_) => Some(message.error(-32600, "Not a JSONRPC message".to_owned(), None)),
+                Message::SyntaxError(ref e) => Some(message.error(-32700, e.to_owned(), None)),
                 _ => None,
             }
         });

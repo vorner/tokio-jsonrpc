@@ -61,7 +61,7 @@ impl Codec for Line {
                 Ok(message) => Ok(Some(message)),
                 // A hack to recognize syntax errors, before https://github.com/serde-rs/json/issues/245
                 // is done.
-                Err(ref e) if e.cause().is_none() => Ok(Some(Message::SyntaxError)),
+                Err(ref e) if e.cause().is_none() => Ok(Some(Message::SyntaxError(format!("{}", e)))),
                 Err(e) => Err(err_map(e)),
             }
         } else {
@@ -128,6 +128,9 @@ mod tests {
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
-        assert_eq!(one(b"{]\n", b"").unwrap(), Some(Message::SyntaxError));
+        match one(b"{]\n", b"") {
+            Ok(Some(Message::SyntaxError(_))) => (),
+            other => panic!("Something unexpected: {:?}", other),
+        };
     }
 }

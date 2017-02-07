@@ -173,7 +173,7 @@ pub enum Message {
     #[serde(skip_serializing)]
     Unmatched(Value),
     #[serde(skip_serializing, skip_deserializing)]
-    SyntaxError,
+    SyntaxError(String),
 }
 
 impl Message {
@@ -219,7 +219,7 @@ impl Message {
         let id = match *self {
             Message::Request(Request { ref id, .. }) => id.clone(),
             Message::Unmatched(_) |
-            Message::SyntaxError => Value::Null,
+            Message::SyntaxError(_) => Value::Null,
             _ => panic!("A Request, Unmatched or SyntaxError was expected, received {:?}", self),
         };
         Message::Response(Response {
@@ -249,7 +249,7 @@ impl FromStr for Message {
             Ok(message) => Ok(message),
             // A hack to recognize syntax errors, before https://github.com/serde-rs/json/issues/245
             // is done.
-            Err(ref e) if e.cause().is_none() => Ok(Message::SyntaxError),
+            Err(ref e) if e.cause().is_none() => Ok(Message::SyntaxError(format!("{}", e))),
             Err(e) => Err(e),
         }
     }
@@ -344,7 +344,7 @@ mod tests {
                 }),
             ]));
         assert!(to_vec(&Message::Unmatched(Value::Null)).is_err());
-        assert!(to_vec(&Message::SyntaxError).is_err());
+        assert!(to_vec(&Message::SyntaxError("Error".to_owned())).is_err());
     }
 
     /// A helper for the `broken` test.
@@ -378,7 +378,10 @@ mod tests {
         // Something completely different
         one(r#"{"x": [1, 2, 3]}"#);
 
-        assert_eq!(r#"{]"#.parse::<Message>().unwrap(), Message::SyntaxError);
+        match r#"{]"#.parse::<Message>() {
+            Ok(Message::SyntaxError(_)) => (),
+            other => panic!("Something unexpected: {:?}", other),
+        };
     }
 
     /// Test some non-trivial aspects of the constructors
