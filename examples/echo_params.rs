@@ -15,7 +15,7 @@ extern crate futures;
 extern crate tokio_core;
 
 use tokio_jsonrpc::{Message, LineCodec};
-use tokio_jsonrpc::message::{Notification, Broken};
+use tokio_jsonrpc::message::Notification;
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
@@ -33,8 +33,6 @@ fn main() {
         let (w, r) = jsonized.split();
         let answers = r.filter_map(|message| {
             println!("A message received: {:?}", message);
-            // TODO: We probably want some more convenient handling, like more handy methods on
-            // Message.
             match message {
                 Ok(Message::Request(ref req)) => {
                     println!("Got method {}", req.method);
@@ -48,17 +46,13 @@ fn main() {
                     println!("Got notification {}", method);
                     None
                 },
-                Err(Broken::Unmatched(_)) => Some(Message::error(-32600, "Not a JSONRPC message".to_owned(), None)),
-                Err(Broken::SyntaxError(ref e)) => Some(Message::error(-32700, e.to_owned(), None)),
+                Err(ref e) => Some(e.reply()),
                 _ => None,
             }
         });
         let sent = w.send_all(answers)
             .map(|_| ())
-            .map_err(|_| {
-                // TODO Something with the error ‒ logging?
-                ()
-            });
+            .map_err(|e| println!("{}", e));
         // Do the sending in the background
         handle.spawn(sent);
         Ok(())

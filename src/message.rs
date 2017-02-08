@@ -4,7 +4,6 @@
 // http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
-// Copyright (c) 2017 Michal 'vorner' Vaner <vorner@vorner.cz>
 
 //! A JSON-RPC 2.0 messages
 //!
@@ -214,7 +213,18 @@ pub enum Broken {
     SyntaxError(String),
 }
 
-// TODO: Allow answering by an error directly (the correct one).
+impl Broken {
+    /// Generate an appropriate error message
+    ///
+    /// The error message for these things are specified in the RFC, so this just creates an error
+    /// with the right values.
+    pub fn reply(&self) -> Message {
+        match *self {
+            Broken::Unmatched(_) => Message::error(-32600, "Invalid request".to_owned(), None),
+            Broken::SyntaxError(ref e) => Message::error(-32600, "Parse error".to_owned(), Some(Value::String(e.clone()))),
+        }
+    }
+}
 
 // A trick to easily deserialize and detect valid JSON, but invalid Message.
 #[derive(Deserialize)]
