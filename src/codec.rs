@@ -7,18 +7,20 @@
 // Copyright (c) 2017 Michal 'vorner' Vaner <vorner@vorner.cz>
 
 //! The codecs to encode and decode messages from a stream of bytes.
-
-// TODO: Have both line-separated and object separated codecs. The first can detect syntax errors,
-// while the other can decode multiline messages or messages on single line.
+//!
+//! You can choose to use either line separated one ([Line](struct.Line.html)) or
+//! boundary separated one ([Boundary](struct.Boundary.html)). The first one needs the
+//! messages to be separated by newlines and not to contain newlines in their representation. On
+//! the other hand, it can recover from syntax error in a message and you can respond with an error
+//! instead of terminating the connection.
 
 use std::io::{Result as IoResult, Error, ErrorKind};
 
-use tokio_core::io::{Codec as TokioCodec, EasyBuf};
-use serde_json::de::from_slice;
+use tokio_core::io::{Codec, EasyBuf};
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
-use message::Message;
+use message::{Message, Parsed, from_slice};
 
 /// A helper to wrap the error
 fn err_map(e: SerdeError) -> Error {
@@ -27,23 +29,21 @@ fn err_map(e: SerdeError) -> Error {
 
 /// A codec working with JSONRPC 2.0 messages.
 ///
-/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object boundaries,
-/// so it works with both newline-separated and object-separated encoding. It produces
-/// newline-separated stream, which is more generic.
-pub struct Codec;
+/// This produces or encodes [Message](../message/enum.Message.hmtl). It separates the records by
+/// newlines, so it can recover from syntax error.s
+///
+/// Note that the produced items is a `Result`, to allow not terminating the stream on
+/// protocol-level errors.
+pub struct Line;
 
-impl TokioCodec for Codec {
-    type In = Message;
+impl Codec for Line {
+    type In = Parsed;
     type Out = Message;
-    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Message>> {
-        // TODO: Use object boundary instead of newlines. This waits for
-        // https://github.com/serde-rs/json/pull/212 or for being able to
-        // distinguish EOF errors from the others for the trick in
-        // https://github.com/serde-rs/json/issues/183.
+    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             let line = buf.drain_to(i);
             buf.drain_to(1);
-            from_slice(line.as_slice()).map(Some).map_err(err_map)
+            Ok(Some(from_slice(line.as_slice())))
         } else {
             Ok(None)
         }
@@ -55,22 +55,32 @@ impl TokioCodec for Codec {
     }
 }
 
+/// A codec working with JSONRPC 2.0 messages.
+///
+/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object boundaries,
+/// so it works with both newline-separated and object-separated encoding. It produces
+/// newline-separated stream, which is more generic.
+///
+/// TODO: This is not implemented yet.
+pub struct Boundary;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use message::Broken;
 
     #[test]
     fn encode() {
         let mut output = Vec::new();
-        let mut codec = Codec;
+        let mut codec = Line;
         codec.encode(Message::notification("notif".to_owned(), None), &mut output).unwrap();
         assert_eq!(Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]), output);
     }
 
     #[test]
     fn decode() {
-        fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Message>> {
-            let mut codec = Codec;
+        fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Parsed>> {
+            let mut codec = Line;
             let mut buf = EasyBuf::new();
             buf.get_mut().extend_from_slice(input);
             let result = codec.decode(&mut buf);
@@ -78,27 +88,25 @@ mod tests {
             result
         }
 
-        // TODO: We currently have to terminate the records by newline, but that's a temporary
-        // problem. Once that is solved, have some tests without the newline as well. Also, test
-        // some messages that don't have a newline, but have a syntax error, so we know we abort
-        // soon enough.
-
         let notif = Message::notification("notif".to_owned(), None);
         let msgstring = Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]);
         // A single message, nothing is left
-        assert_eq!(one(&msgstring, b"").unwrap(), Some(notif.clone()));
+        assert_eq!(one(&msgstring, b"").unwrap(), Some(Ok(notif.clone())));
         // The first message is decoded, the second stays in the buffer
         let mut twomsgs = msgstring.clone();
         twomsgs.extend_from_slice(&msgstring);
-        assert_eq!(one(&twomsgs, &msgstring).unwrap(), Some(notif.clone()));
+        assert_eq!(one(&twomsgs, &msgstring).unwrap(), Some(Ok(notif.clone())));
         // The second message is incomplete, but stays there
         let incomplete = Vec::from(&br#"{"jsonrpc": "2.0", "method":""#[..]);
         let mut oneandhalf = msgstring.clone();
         oneandhalf.extend_from_slice(&incomplete);
-        assert_eq!(one(&oneandhalf, &incomplete).unwrap(), Some(notif.clone()));
+        assert_eq!(one(&oneandhalf, &incomplete).unwrap(), Some(Ok(notif.clone())));
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
-        assert!(one(b"{]\n", b"").is_err());
+        match one(b"{]\n", b"") {
+            Ok(Some(Err(Broken::SyntaxError(_)))) => (),
+            other => panic!("Something unexpected: {:?}", other),
+        };
     }
 }

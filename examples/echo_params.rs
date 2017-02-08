@@ -14,8 +14,8 @@ extern crate serde_json;
 extern crate futures;
 extern crate tokio_core;
 
-use tokio_jsonrpc::{Message, Codec};
-use tokio_jsonrpc::message::{Request, Notification};
+use tokio_jsonrpc::{Message, LineCodec};
+use tokio_jsonrpc::message::{Notification, Broken};
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
@@ -29,25 +29,27 @@ fn main() {
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
     let connections = listener.incoming();
     let service = connections.for_each(|(stream, _)| {
-        let jsonized = stream.framed(Codec);
+        let jsonized = stream.framed(LineCodec);
         let (w, r) = jsonized.split();
         let answers = r.filter_map(|message| {
+            println!("A message received: {:?}", message);
             // TODO: We probably want some more convenient handling, like more handy methods on
             // Message.
             match message {
-                Message::Request(Request { ref method, ref params, .. }) => {
-                    println!("Got method {}", method);
-                    if method == "echo" {
-                        Some(message.reply(json!([method, params])))
+                Ok(Message::Request(ref req)) => {
+                    println!("Got method {}", req.method);
+                    if req.method == "echo" {
+                        Some(req.reply(json!([req.method, req.params])))
                     } else {
-                        Some(message.error(-32601, "Unknown method".to_owned(), None))
+                        Some(req.error(-32601, format!("Unknown method {}", req.method), None))
                     }
                 },
-                Message::Notification(Notification { ref method, .. }) => {
+                Ok(Message::Notification(Notification { ref method, .. })) => {
                     println!("Got notification {}", method);
                     None
                 },
-                Message::Unmatched(_) => Some(message.error(-32600, "Not JSONRPC".to_owned(), None)),
+                Err(Broken::Unmatched(_)) => Some(Message::error(-32600, "Not a JSONRPC message".to_owned(), None)),
+                Err(Broken::SyntaxError(ref e)) => Some(Message::error(-32700, e.to_owned(), None)),
                 _ => None,
             }
         });

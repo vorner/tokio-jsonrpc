@@ -18,5 +18,5 @@ extern crate tokio_core;
 pub mod message;
 pub mod codec;
 
-pub use message::Message;
-pub use codec::Codec;
+pub use message::{Message, Parsed};
+pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};

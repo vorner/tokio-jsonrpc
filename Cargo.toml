@@ -13,10 +13,6 @@ uuid = { version = "0.2", features = ["v4"] }
 
 [lib]
 
-[[bin]]
-name = "tokio-jsonrpc"
-doc = false
-
 [profile.dev]
 codegen-units = 4
 
