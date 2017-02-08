@@ -29,7 +29,7 @@ fn main() {
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
     let connections = listener.incoming();
     let service = connections.for_each(|(stream, _)| {
-        let jsonized = stream.framed(LineCodec);
+        let jsonized = stream.framed(LineCodec::new());
         let (w, r) = jsonized.split();
         let answers = r.filter_map(|message| {
             println!("A message received: {:?}", message);

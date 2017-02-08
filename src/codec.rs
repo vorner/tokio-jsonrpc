@@ -34,17 +34,31 @@ fn err_map(e: SerdeError) -> Error {
 ///
 /// Note that the produced items is a `Result`, to allow not terminating the stream on
 /// protocol-level errors.
-pub struct Line;
+#[derive(Debug, Default)]
+pub struct Line(usize);
+
+impl Line {
+    pub fn new() -> Self {
+        Line(0)
+    }
+}
 
 impl Codec for Line {
     type In = Parsed;
     type Out = Message;
     fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
-        if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
-            let line = buf.drain_to(i);
+        // Where did we stop scanning before? Scan only the new part
+        let start_pos = self.0;
+        if let Some(i) = buf.as_slice()[start_pos..].iter().position(|&b| b == b'\n') {
+            let end_pos = start_pos + i;
+            let line = buf.drain_to(end_pos);
             buf.drain_to(1);
+            // We'll start from the beginning next time.
+            self.0 = 0;
             Ok(Some(from_slice(line.as_slice())))
         } else {
+            // Mark where we ended scanning.
+            self.0 = buf.len();
             Ok(None)
         }
     }
@@ -72,7 +86,7 @@ mod tests {
     #[test]
     fn encode() {
         let mut output = Vec::new();
-        let mut codec = Line;
+        let mut codec = Line::new();
         codec.encode(Message::notification("notif".to_owned(), None), &mut output).unwrap();
         assert_eq!(Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]), output);
     }
@@ -80,7 +94,7 @@ mod tests {
     #[test]
     fn decode() {
         fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Parsed>> {
-            let mut codec = Line;
+            let mut codec = Line::new();
             let mut buf = EasyBuf::new();
             buf.get_mut().extend_from_slice(input);
             let result = codec.decode(&mut buf);
