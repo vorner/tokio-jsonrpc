@@ -4,7 +4,6 @@
 // http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
-// Copyright (c) 2017 Michal 'vorner' Vaner <vorner@vorner.cz>
 
 //! The codecs to encode and decode messages from a stream of bytes.
 //!

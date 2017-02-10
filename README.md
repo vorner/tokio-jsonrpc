@@ -11,6 +11,10 @@ server and the client at the same time.
 This is *work in progress*, most of the functionality is still missing and the
 API of what exists is likely to change.
 
+Currently it contains the lower-level parts, parsing the messages and sending
+anwers. A small example how to use these can be found in the [echo
+params](examples/echo_params.rs) program.
+
 ## License
 
 Licensed under either of
