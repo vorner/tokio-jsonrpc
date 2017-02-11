@@ -2,6 +2,17 @@
 name = "tokio-jsonrpc"
 version = "0.1.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+description = "An implementation of JSON RPC 2.0 for tokio"
+documentatiot = "https://docs.rs/tokio-jsonrpc"
+repository = "https://github.com/vorner/tokio-jsonrpc"
+readme = "README.md"
+keywords = ["tokio", "json", "jsonrpc"]
+categories = ["asynchronous", "network-programming"]
+license = "Apache-2.0/MIT"
+
+[badges]
+travis-ci = { repository = "vorner/tokio-jsonrpc" }
+appveyor = { repository = "vorner/tokio-jsonrpc" }
 
 [dependencies]
 futures = "0.1"
