@@ -15,6 +15,8 @@ Currently it contains the lower-level parts, parsing the messages and sending
 anwers. A small example how to use these can be found in the [echo
 params](examples/echo_params.rs) program.
 
+The API documentation can be found [here](https://docs.rs/tokio-jsonrpc).
+
 ## License
 
 Licensed under either of
