@@ -12,15 +12,18 @@
 //! [`EmptyServer`](struct.EmptyServer.html) as the server. If you want a server-only endpoint,
 //! simply don't call any RPCs or notifications.
 
-use message::{RPCError, Message, Parsed};
+use message::{Message, Parsed, Response, Request, Notification};
 
 use std::io::{Error as IoError, ErrorKind};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
-use futures::future::BoxFuture;
-use futures_mpsc::channel;
+use futures_mpsc::{channel, Sender};
+use relay::{channel as relay_channel, Sender as RelaySender};
+use tokio_core::reactor::Handle;
 
 /// The server endpoint
 ///
@@ -41,13 +44,14 @@ pub trait Server {
     ///
     /// Once the future resolves, the value or error is sent to the client as the reply. The reply
     /// is wrapped automatically.
-    type RPCCallResult: IntoFuture<Item = Self::Success, Error = RPCError>;
+    type RPCCallResult: IntoFuture<Item = Self::Success, Error = (i64, String, Option<Value>)>;
     /// The result of the RPC call
     ///
     /// As the client doesn't expect anything in return, both the success and error results are
     /// thrown away and therefore (). However, it still makes sense to distinguish success and
     /// error.
-    type NotificationResult: IntoFuture<Item = (), Error = ()>;
+    // TODO: Why do we need 'static here and not above?
+    type NotificationResult: IntoFuture<Item = (), Error = ()> + 'static;
     /// Called when the client requests something
     ///
     /// This is a callback from the [endpoint](struct.Endpoint.html) when the client requests
@@ -55,7 +59,7 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn rpc(_method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
+    fn rpc(&self, _method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
         None
     }
     /// Called when the client sends a notification
@@ -65,8 +69,30 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn notification(_method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
+    fn notification(&self, _method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
         None
+    }
+}
+
+// Our own BoxFuture that is *not* send. We don't do send.
+type BoxFuture<T, E> = Box<Future<Item = T, Error = E>>;
+
+fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request) -> BoxFuture<Option<Message>, IoError> {
+    match server.rpc(&request.method, &request.params) {
+        None => Box::new(Ok(Some(Message::error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
+        Some(future) => {
+            Box::new(future.into_future().then(move |result| match result {
+                Err((code, msg, data)) => Ok(Some(request.error(code, msg, data))),
+                Ok(result) => Ok(Some(request.reply(to_value(result).expect("Trying to return a value that can't be converted to JSON")))),
+            }))
+        },
+    }
+}
+
+fn do_notification<RPCServer: Server>(server: &RPCServer, notification: Notification) -> BoxFuture<Option<Message>, IoError> {
+    match server.notification(&notification.method, &notification.params) {
+        None => Box::new(Ok(None).into_future()),
+        Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
     }
 }
 
@@ -78,49 +104,47 @@ pub struct EmptyServer;
 
 impl Server for EmptyServer {
     type Success = ();
-    type RPCCallResult = Result<(), RPCError>;
+    type RPCCallResult = Result<(), (i64, String, Option<Value>)>;
     type NotificationResult = Result<(), ()>;
 }
 
-pub struct Endpoint<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> {
-    connection: Connection,
-    server: RPCServer,
+pub struct Client {
+    idmap: Rc<HashMap<String, RelaySender<Response>>>,
+    sender: Sender<Message>,
 }
 
-impl<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> Endpoint<Connection, RPCServer> {
-    pub fn new(connection: Connection, server: RPCServer) -> Self {
-        Endpoint {
-            connection: connection,
-            server: server,
-        }
-    }
-}
-
-impl<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> IntoFuture for Endpoint<Connection, RPCServer> {
-    type Item = ();
-    // TODO: Some better error?
-    type Error = IoError;
-    // TODO: The real type?
-    type Future = BoxFuture<(), IoError>;
-    fn into_future(self) -> Self::Future {
-        // The channel where rpc requests will be inserted once we provide client endpoint
-        let (sender, receiver) = channel(32);
-        let (sink, stream) = self.connection.split();
-        // Create a future for each received item that'll return something. Run some of them in
-        // parallel.
-        let answers = stream.map(|parsed| -> BoxFuture<Option<Message>, IoError> {
-                match parsed {
-                    Err(broken) => Ok(Some(broken.reply())).into_future().boxed(),
-                    _ => Ok(None).into_future().boxed(),
-                }
-            })
-            .buffer_unordered(4)
-            .filter_map(|message| message);
-        // Take both the client RPCs and the answers
-        let outbound = answers.select(receiver.map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen")));
-        // And send them all
-        let transmitted = sink.send_all(outbound);
-        // Once the last thing is sent, we're done
-        transmitted.map(|_| ()).boxed()
-    }
+// TODO: Some other interface to this?
+pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, server: RPCServer) -> Client
+    where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
+          // TODO: How do we get rid of Send? We don't really need Send in this
+          RPCServer: Server + 'static
+{
+    let (sender, receiver) = channel(32);
+    let idmap = Rc::new(HashMap::new());
+    let client = Client {
+        idmap: idmap.clone(),
+        sender: sender,
+    };
+    let (sink, stream) = connection.split();
+    // Create a future for each received item that'll return something. Run some of them in
+    // parallel.
+    // TODO: Batches are a bit complicated, aren't they?
+    let answers = stream.map(move |parsed| -> BoxFuture<Option<Message>, IoError> {
+            match parsed {
+                Err(broken) => Ok(Some(broken.reply())).into_future().boxed(),
+                Ok(Message::Request(req)) => do_request(&server, req),
+                Ok(Message::Notification(notif)) => do_notification(&server, notif),
+                _ => Ok(None).into_future().boxed(),
+            }
+        })
+        .buffer_unordered(4)
+        .filter_map(|message| message);
+    // Take both the client RPCs and the answers
+    let outbound = answers.select(receiver.map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen")));
+    // And send them all
+    let transmitted = sink.send_all(outbound);
+    // Once the last thing is sent, we're done
+    // TODO: Something with the errors
+    handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
+    client
 }

@@ -54,6 +54,7 @@ extern crate uuid;
 extern crate tokio_core;
 extern crate futures;
 extern crate futures_mpsc;
+extern crate relay;
 
 pub mod message;
 pub mod codec;
