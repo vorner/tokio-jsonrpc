@@ -53,6 +53,7 @@ extern crate serde_derive;
 extern crate uuid;
 extern crate tokio_core;
 extern crate futures;
+extern crate futures_mpsc;
 
 pub mod message;
 pub mod codec;

@@ -12,11 +12,15 @@
 //! [`EmptyServer`](struct.EmptyServer.html) as the server. If you want a server-only endpoint,
 //! simply don't call any RPCs or notifications.
 
-use message::RPCError;
+use message::{RPCError, Message, Parsed};
+
+use std::io::{Error as IoError, ErrorKind};
 
 use serde::Serialize;
 use serde_json::Value;
-use futures::IntoFuture;
+use futures::{Future, IntoFuture, Stream, Sink};
+use futures::future::BoxFuture;
+use futures_mpsc::channel;
 
 /// The server endpoint
 ///
@@ -76,4 +80,47 @@ impl Server for EmptyServer {
     type Success = ();
     type RPCCallResult = Result<(), RPCError>;
     type NotificationResult = Result<(), ()>;
+}
+
+pub struct Endpoint<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> {
+    connection: Connection,
+    server: RPCServer,
+}
+
+impl<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> Endpoint<Connection, RPCServer> {
+    pub fn new(connection: Connection, server: RPCServer) -> Self {
+        Endpoint {
+            connection: connection,
+            server: server,
+        }
+    }
+}
+
+impl<Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static, RPCServer: Server> IntoFuture for Endpoint<Connection, RPCServer> {
+    type Item = ();
+    // TODO: Some better error?
+    type Error = IoError;
+    // TODO: The real type?
+    type Future = BoxFuture<(), IoError>;
+    fn into_future(self) -> Self::Future {
+        // The channel where rpc requests will be inserted once we provide client endpoint
+        let (sender, receiver) = channel(32);
+        let (sink, stream) = self.connection.split();
+        // Create a future for each received item that'll return something. Run some of them in
+        // parallel.
+        let answers = stream.map(|parsed| -> BoxFuture<Option<Message>, IoError> {
+                match parsed {
+                    Err(broken) => Ok(Some(broken.reply())).into_future().boxed(),
+                    _ => Ok(None).into_future().boxed(),
+                }
+            })
+            .buffer_unordered(4)
+            .filter_map(|message| message);
+        // Take both the client RPCs and the answers
+        let outbound = answers.select(receiver.map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen")));
+        // And send them all
+        let transmitted = sink.send_all(outbound);
+        // Once the last thing is sent, we're done
+        transmitted.map(|_| ()).boxed()
+    }
 }
