@@ -52,9 +52,11 @@ extern crate serde_json;
 extern crate serde_derive;
 extern crate uuid;
 extern crate tokio_core;
+extern crate futures;
 
 pub mod message;
 pub mod codec;
+pub mod endpoint;
 
 pub use message::{Message, Parsed};
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
