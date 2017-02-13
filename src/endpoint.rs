@@ -128,7 +128,12 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     let (sink, stream) = connection.split();
     // Create a future for each received item that'll return something. Run some of them in
     // parallel.
-    // TODO: Batches are a bit complicated, aren't they?
+
+    // TODO: Return stream of streams and flatten it. That way if we have a batch we can produce
+    // bunch of single-task futures for the RPCs. Then we can have one at the very end that
+    // collects everything together and produces the actual answer.
+
+    // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
     let answers = stream.map(move |parsed| -> BoxFuture<Option<Message>, IoError> {
             match parsed {
                 Err(broken) => Ok(Some(broken.reply())).into_future().boxed(),

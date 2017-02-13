@@ -1,1 +1,3 @@
 • Provide logging
+• Builder for the endpoint
+• Update documentation, Endpoint is no longer a struct.
