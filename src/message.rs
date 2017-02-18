@@ -159,6 +159,10 @@ pub struct Notification {
 /// message can decode and encode both directions of the protocol.
 ///
 /// The `Batch` variant is supposed to be created directly, without a constructor.
+///
+/// The `UnmatchedSub` variant is used when a request is an array and some of the subrequests
+/// aren't recognized as valid json rpc 2.0 messages. This is never returned as a top-level
+/// element, it is returned as `Err(Broken::Unmatched)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -166,6 +170,7 @@ pub enum Message {
     Response(Response),
     Notification(Notification),
     Batch(Vec<Message>),
+    UnmatchedSub(Value),
 }
 
 impl Message {
@@ -241,6 +246,7 @@ pub type Parsed = Result<Message, Broken>;
 /// Invalid JSON or JSONRPC messages are reported as [Broken](enum.Broken.html).
 pub fn from_slice(s: &[u8]) -> Parsed {
     match ::serde_json::de::from_slice(s) {
+        Ok(WireMessage::Message(Message::UnmatchedSub(value))) => Err(Broken::Unmatched(value)),
         Ok(WireMessage::Message(m)) => Ok(m),
         Ok(WireMessage::Broken(b)) => Err(b),
         // Other errors can't happen right now, when we have the slice
@@ -334,7 +340,8 @@ mod tests {
         // A batch
         one(r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
-                {"jsonrpc": "2.0", "method": "call", "id": 42}
+                {"jsonrpc": "2.0", "method": "call", "id": 42},
+                true
             ]"#,
             &Message::Batch(vec![
                 Message::Notification(Notification {
@@ -348,6 +355,7 @@ mod tests {
                     params: None,
                     id: json!(42),
                 }),
+                Message::UnmatchedSub(Value::Bool(true)),
             ]));
     }
 
