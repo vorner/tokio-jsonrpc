@@ -21,6 +21,7 @@ use std::rc::Rc;
 use serde::Serialize;
 use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
+use futures::stream::{self, Once, empty};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
 use tokio_core::reactor::Handle;
@@ -74,10 +75,17 @@ pub trait Server {
     }
 }
 
-// Our own BoxFuture that is *not* send. We don't do send.
+// Our own BoxFuture & friends that is *not* send. We don't do send.
 type BoxFuture<T, E> = Box<Future<Item = T, Error = E>>;
+type FutureMessage = BoxFuture<Option<Message>, IoError>;
+type BoxStream<T, E> = Box<Stream<Item = T, Error = E>>;
 
-fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request) -> BoxFuture<Option<Message>, IoError> {
+// A future::stream::once that takes only the success value, for convenience.
+fn once<T, E>(item: T) -> Once<T, E> {
+    stream::once(Ok(item))
+}
+
+fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request) -> FutureMessage {
     match server.rpc(&request.method, &request.params) {
         None => Box::new(Ok(Some(Message::error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
         Some(future) => {
@@ -89,7 +97,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request)
     }
 }
 
-fn do_notification<RPCServer: Server>(server: &RPCServer, notification: Notification) -> BoxFuture<Option<Message>, IoError> {
+fn do_notification<RPCServer: Server>(server: &RPCServer, notification: Notification) -> FutureMessage {
     match server.notification(&notification.method, &notification.params) {
         None => Box::new(Ok(None).into_future()),
         Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
@@ -113,10 +121,21 @@ pub struct Client {
     sender: Sender<Message>,
 }
 
+fn msg_handle<RPCServer: Server + 'static>(server: &RPCServer, msg: Parsed) -> BoxStream<FutureMessage, IoError> {
+    match msg {
+        Err(broken) => {
+            let err: FutureMessage = Ok(Some(broken.reply())).into_future().boxed();
+            Box::new(once(err))
+        },
+        Ok(Message::Request(req)) => Box::new(once(do_request(server, req))),
+        Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, notif))),
+        _ => Box::new(empty()),
+    }
+}
+
 // TODO: Some other interface to this?
 pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, server: RPCServer) -> Client
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
-          // TODO: How do we get rid of Send? We don't really need Send in this
           RPCServer: Server + 'static
 {
     let (sender, receiver) = channel(32);
@@ -129,19 +148,9 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     // Create a future for each received item that'll return something. Run some of them in
     // parallel.
 
-    // TODO: Return stream of streams and flatten it. That way if we have a batch we can produce
-    // bunch of single-task futures for the RPCs. Then we can have one at the very end that
-    // collects everything together and produces the actual answer.
-
     // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
-    let answers = stream.map(move |parsed| -> BoxFuture<Option<Message>, IoError> {
-            match parsed {
-                Err(broken) => Ok(Some(broken.reply())).into_future().boxed(),
-                Ok(Message::Request(req)) => do_request(&server, req),
-                Ok(Message::Notification(notif)) => do_notification(&server, notif),
-                _ => Ok(None).into_future().boxed(),
-            }
-        })
+    let answers = stream.map(move |parsed| msg_handle(&server, parsed))
+        .flatten()
         .buffer_unordered(4)
         .filter_map(|message| message);
     // Take both the client RPCs and the answers
