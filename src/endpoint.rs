@@ -18,6 +18,7 @@ use std::io::{Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
+use std::cell::RefCell;
 
 use serde::Serialize;
 use serde_json::{Value, to_value};
@@ -25,7 +26,7 @@ use futures::{Future, IntoFuture, Stream, Sink};
 use futures::stream::{self, Once, empty};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
-use tokio_core::reactor::Handle;
+use tokio_core::reactor::{Handle, Timeout};
 
 /// The server endpoint
 ///
@@ -199,21 +200,72 @@ impl Server for EmptyServer {
 
 #[derive(Clone)]
 pub struct Client {
-    idmap: Rc<HashMap<String, RelaySender<Response>>>,
+    idmap: Rc<RefCell<HashMap<String, RelaySender<Response>>>>,
     sender: Sender<Message>,
+    handle: Handle,
 }
 
 pub type Notified = BoxFuture<Client, IoError>;
-pub type RPCAnswered = BoxFuture<Response, IoError>;
-pub type RPCSent = BoxFuture<(Client, RPCAnswered), IoError>;
+pub type RPCFinished = BoxFuture<Option<Response>, IoError>;
+pub type RPCSent = BoxFuture<(Client, RPCFinished), IoError>;
 
 impl Client {
     // TODO: This interface sounds a bit awkward.
-    pub fn call(self, method: String, params: Option<Value>, timeout: &Duration) -> RPCSent {
-        unimplemented!();
+    pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
+        // We have to deconstruct self now, because the sender's send takes ownership for it for a
+        // while. We construct it back once the message is passed on.
+        let idmap = self.idmap;
+        let handle = self.handle;
+        let msg = Message::request(method, params);
+        let id = match msg {
+            Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
+            _ => unreachable!("We produce only string IDs"),
+        };
+        let (sender, receiver) = relay_channel();
+        let received = receiver.map_err(shouldnt_happen).map(Some);
+        let completed: RPCFinished = match timeout {
+            Some(time) => {
+                // If we were provided with a timeout, select what happens first.
+                let timeout = match Timeout::new(time, &handle) {
+                    Err(e) => return Box::new(Err(e).into_future()),
+                    Ok(t) => t,
+                };
+                let idmap = idmap.clone();
+                let id = id.clone();
+                let completed = timeout
+                    .map(|_| None)
+                    .select(received)
+                    .map(|(r, _)| r)
+                    .map_err(|(e, _)| e)
+                    // Make sure the ID/sender is removed even when timeout wins.
+                    // This is a NOOP in case the real result arrives, since it is already deleted
+                    // by then, but that doesn't matter and this is simpler.
+                    .then(move |r| {
+                        idmap.borrow_mut().remove(&id);
+                        r
+                    });
+                Box::new(completed)
+            },
+            // If we don't have the timeout, simply pass the future to get the response through.
+            None => Box::new(received),
+        };
+        idmap.borrow_mut().insert(id, sender);
+        let sent = self.sender
+            .send(msg)
+            .map_err(shouldnt_happen)
+            .map(move |sender| {
+                let client = Client {
+                    idmap: idmap,
+                    sender: sender,
+                    handle: handle,
+                };
+                (client, completed)
+            });
+        Box::new(sent)
     }
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
         let idmap = self.idmap;
+        let handle = self.handle;
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
@@ -221,28 +273,31 @@ impl Client {
                 Client {
                     idmap: idmap,
                     sender: sender,
+                    handle: handle,
                 }
             });
         Box::new(future)
     }
 }
 
-// TODO: Some other interface to this?
+// TODO: Some other interface to this? A builder?
 pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, server: RPCServer) -> Client
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
           RPCServer: Server + 'static
 {
     let (sender, receiver) = channel(32);
-    let idmap = Rc::new(HashMap::new());
+    let idmap = Rc::new(RefCell::new(HashMap::new()));
     let client = Client {
         idmap: idmap.clone(),
         sender: sender,
+        handle: handle.clone(),
     };
     let (sink, stream) = connection.split();
     // Create a future for each received item that'll return something. Run some of them in
     // parallel.
 
     // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
+    // TODO: The receiving parts of RPC answers goes somewhere here
     let answers = stream.map(move |parsed| do_msg(&server, parsed))
         .flatten()
         .buffer_unordered(4)
