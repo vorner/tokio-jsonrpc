@@ -17,6 +17,7 @@ use message::{Broken, Message, Parsed, Response, Request, Notification};
 use std::io::{Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, to_value};
@@ -86,6 +87,10 @@ fn once<T, E>(item: T) -> Once<T, E> {
     stream::once(Ok(item))
 }
 
+fn shouldnt_happen<E>(_: E) -> IoError {
+    IoError::new(ErrorKind::Other, "Shouldn't happen")
+}
+
 fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request) -> FutureMessage {
     match server.rpc(&request.method, &request.params) {
         None => Box::new(Ok(Some(Message::error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
@@ -138,7 +143,7 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, msg: Vec<Message>) 
                         None => Box::new(Ok(None).into_future()),
                         Some(msg) => {
                             Box::new(sender.send(msg)
-                                .map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen"))
+                                .map_err(shouldnt_happen)
                                 .map(|_| None))
                         },
                     }
@@ -152,7 +157,7 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, msg: Vec<Message>) 
     let subs_stream = stream::iter(small_streams).flatten();
     // Once all the results are produced, wrap them into a batch and return that one
     let collected = receiver.collect()
-        .map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen"))
+        .map_err(shouldnt_happen)
         .map(|results| if results.is_empty() {
             // The spec says to send nothing at all if there are no results
             None
@@ -192,9 +197,34 @@ impl Server for EmptyServer {
     type NotificationResult = Result<(), ()>;
 }
 
+#[derive(Clone)]
 pub struct Client {
     idmap: Rc<HashMap<String, RelaySender<Response>>>,
     sender: Sender<Message>,
+}
+
+pub type Notified = BoxFuture<Client, IoError>;
+pub type RPCAnswered = BoxFuture<Response, IoError>;
+pub type RPCSent = BoxFuture<(Client, RPCAnswered), IoError>;
+
+impl Client {
+    // TODO: This interface sounds a bit awkward.
+    pub fn call(self, method: String, params: Option<Value>, timeout: &Duration) -> RPCSent {
+        unimplemented!();
+    }
+    pub fn notify(self, method: String, params: Option<Value>) -> Notified {
+        let idmap = self.idmap;
+        let future = self.sender
+            .send(Message::notification(method, params))
+            .map_err(shouldnt_happen)
+            .map(move |sender| {
+                Client {
+                    idmap: idmap,
+                    sender: sender,
+                }
+            });
+        Box::new(future)
+    }
 }
 
 // TODO: Some other interface to this?
@@ -218,7 +248,7 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
         .buffer_unordered(4)
         .filter_map(|message| message);
     // Take both the client RPCs and the answers
-    let outbound = answers.select(receiver.map_err(|_| IoError::new(ErrorKind::Other, "Shouldn't happen")));
+    let outbound = answers.select(receiver.map_err(shouldnt_happen));
     // And send them all
     let transmitted = sink.send_all(outbound);
     // Once the last thing is sent, we're done
