@@ -2,3 +2,4 @@
 • Builder for the endpoint
 • Update documentation, Endpoint is no longer a struct.
 • Think of how we close the endpoint
+• Consider making the client and the futures it returs Send
