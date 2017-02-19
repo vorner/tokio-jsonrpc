@@ -104,6 +104,8 @@ type FutureMessage = BoxFuture<Option<Message>, IoError>;
 type BoxStream<T, E> = Box<Stream<Item = T, Error = E>>;
 type FutureMessageStream = BoxStream<FutureMessage, IoError>;
 
+type IDMap = Rc<RefCell<HashMap<String, RelaySender<Response>>>>;
+
 // A future::stream::once that takes only the success value, for convenience.
 fn once<T, E>(item: T) -> Once<T, E> {
     stream::once(Ok(item))
@@ -136,7 +138,7 @@ fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &mut ServerCtl, n
 // stream of the computations which return nothing, but gather the results. Then we add yet another
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
-fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, msg: Vec<Message>) -> FutureMessageStream {
+fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, idmap: &IDMap, msg: Vec<Message>) -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
     // future gets its turn, so shorter one could lead to a deadlock.
     let (sender, receiver) = channel(msg.len());
@@ -158,7 +160,7 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl
             // Also, it is a bit unfortunate how we need to allocate so many times here. We may try
             // doing something about that in the future, but without implementing custom future and
             // stream types, this seems the best we can do.
-            let all_sent = do_msg(server, ctl, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
+            let all_sent = do_msg(server, ctl, idmap, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
                 let sender = sender.clone();
                 let msg_sent = future_message.and_then(move |response: Option<Message>| -> FutureMessage {
                     match response {
@@ -193,7 +195,7 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
-fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, msg: Parsed) -> FutureMessageStream {
+fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, idmap: &IDMap, msg: Parsed) -> FutureMessageStream {
     match msg {
         Err(broken) => {
             let err: FutureMessage = Ok(Some(broken.reply())).into_future().boxed();
@@ -201,9 +203,18 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, 
         },
         Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req))),
         Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, ctl, notif))),
-        Ok(Message::Batch(batch)) => do_batch(server, ctl, batch),
-        Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, Err(Broken::Unmatched(value))),
-        _ => Box::new(empty()),
+        Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, batch),
+        Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, idmap, Err(Broken::Unmatched(value))),
+        Ok(Message::Response(response)) => {
+            let maybe_sender = response.id
+                .as_str()
+                .and_then(|id| idmap.borrow_mut().remove(id));
+            if let Some(sender) = maybe_sender {
+                sender.complete(response);
+            }
+            // TODO: Else ‒ some logging
+            Box::new(empty())
+        },
     }
 }
 
@@ -224,7 +235,7 @@ impl Server for EmptyServer {
 
 #[derive(Clone)]
 pub struct Client {
-    idmap: Rc<RefCell<HashMap<String, RelaySender<Response>>>>,
+    idmap: IDMap,
     sender: Sender<Message>,
     handle: Handle,
 }
@@ -323,7 +334,7 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
     // TODO: The receiving parts of RPC answers goes somewhere here
     // TODO: Do something about the termination
-    let answers = stream.map(move |parsed| do_msg(&server, &mut ServerCtl, parsed))
+    let answers = stream.map(move |parsed| do_msg(&server, &mut ServerCtl, &idmap, parsed))
         .flatten()
         .buffer_unordered(4)
         .filter_map(|message| message);
