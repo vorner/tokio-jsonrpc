@@ -28,6 +28,22 @@ use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
 use tokio_core::reactor::{Handle, Timeout};
 
+/// A handle to control the server
+///
+/// An instance is provided to each [`Server`](trait.Server.html) callback and it can be used to
+/// manipulate the server (currently only to terminate the server).
+#[derive(Clone)]
+pub struct ServerCtl;
+
+impl ServerCtl {
+    /// Stop answering RPCs and calling notifications
+    ///
+    /// Also terminate the connection if the client handle has been dropped.
+    pub fn terminate(&mut self) {
+        unimplemented!();
+    }
+}
+
 /// The server endpoint
 ///
 /// This is usually implemented by the end application and provides the actual functionality of the
@@ -62,7 +78,7 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn rpc(&self, _method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
+    fn rpc(&self, _ctl: &mut ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
         None
     }
     /// Called when the client sends a notification
@@ -72,9 +88,14 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn notification(&self, _method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
+    fn notification(&self, _ctl: &mut ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
         None
     }
+    /// Called when the endpoint is initialized
+    ///
+    /// It provides a default empty implementation, which can be overriden to hook onto the
+    /// initialization.
+    fn initialized(&self, _ctl: &mut ServerCtl) {}
 }
 
 // Our own BoxFuture & friends that is *not* send. We don't do send.
@@ -92,8 +113,8 @@ fn shouldnt_happen<E>(_: E) -> IoError {
     IoError::new(ErrorKind::Other, "Shouldn't happen")
 }
 
-fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request) -> FutureMessage {
-    match server.rpc(&request.method, &request.params) {
+fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, request: Request) -> FutureMessage {
+    match server.rpc(ctl, &request.method, &request.params) {
         None => Box::new(Ok(Some(Message::error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
         Some(future) => {
             Box::new(future.into_future().then(move |result| match result {
@@ -104,8 +125,8 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, request: Request)
     }
 }
 
-fn do_notification<RPCServer: Server>(server: &RPCServer, notification: Notification) -> FutureMessage {
-    match server.notification(&notification.method, &notification.params) {
+fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &mut ServerCtl, notification: Notification) -> FutureMessage {
+    match server.notification(ctl, &notification.method, &notification.params) {
         None => Box::new(Ok(None).into_future()),
         Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
     }
@@ -115,7 +136,7 @@ fn do_notification<RPCServer: Server>(server: &RPCServer, notification: Notifica
 // stream of the computations which return nothing, but gather the results. Then we add yet another
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
-fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, msg: Vec<Message>) -> FutureMessageStream {
+fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, msg: Vec<Message>) -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
     // future gets its turn, so shorter one could lead to a deadlock.
     let (sender, receiver) = channel(msg.len());
@@ -137,7 +158,7 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, msg: Vec<Message>) 
             // Also, it is a bit unfortunate how we need to allocate so many times here. We may try
             // doing something about that in the future, but without implementing custom future and
             // stream types, this seems the best we can do.
-            let all_sent = do_msg(server, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
+            let all_sent = do_msg(server, ctl, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
                 let sender = sender.clone();
                 let msg_sent = future_message.and_then(move |response: Option<Message>| -> FutureMessage {
                     match response {
@@ -172,16 +193,16 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, msg: Vec<Message>) 
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
-fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, msg: Parsed) -> FutureMessageStream {
+fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &mut ServerCtl, msg: Parsed) -> FutureMessageStream {
     match msg {
         Err(broken) => {
             let err: FutureMessage = Ok(Some(broken.reply())).into_future().boxed();
             Box::new(once(err))
         },
-        Ok(Message::Request(req)) => Box::new(once(do_request(server, req))),
-        Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, notif))),
-        Ok(Message::Batch(batch)) => do_batch(server, batch),
-        Ok(Message::UnmatchedSub(value)) => do_msg(server, Err(Broken::Unmatched(value))),
+        Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req))),
+        Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, ctl, notif))),
+        Ok(Message::Batch(batch)) => do_batch(server, ctl, batch),
+        Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, Err(Broken::Unmatched(value))),
         _ => Box::new(empty()),
     }
 }
@@ -189,13 +210,16 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, msg: Parsed) -> Futur
 /// A RPC server that knows no methods
 ///
 /// You can use this if you want to have a client-only [Endpoint](struct.Endpoint.html). It simply
-/// refuses all the methods passed to it.
+/// terminates the server part right away.
 pub struct EmptyServer;
 
 impl Server for EmptyServer {
     type Success = ();
     type RPCCallResult = Result<(), (i64, String, Option<Value>)>;
     type NotificationResult = Result<(), ()>;
+    fn initialized(&self, ctl: &mut ServerCtl) {
+        ctl.terminate();
+    }
 }
 
 #[derive(Clone)]
@@ -298,7 +322,8 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
 
     // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
     // TODO: The receiving parts of RPC answers goes somewhere here
-    let answers = stream.map(move |parsed| do_msg(&server, parsed))
+    // TODO: Do something about the termination
+    let answers = stream.map(move |parsed| do_msg(&server, &mut ServerCtl, parsed))
         .flatten()
         .buffer_unordered(4)
         .filter_map(|message| message);
