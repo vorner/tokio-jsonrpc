@@ -2,5 +2,5 @@
 • Builder for the endpoint
 • Update documentation, Endpoint is no longer a struct.
 • Consider making the client and the futures it returs Send
-• Put the serverctl on the client as well
 • Add an option to forcefully close the connection
+• Inactivity timeout for the server

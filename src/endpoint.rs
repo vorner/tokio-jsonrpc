@@ -256,6 +256,7 @@ impl Server for EmptyServer {
 pub struct Client {
     idmap: IDMap,
     sender: Sender<Message>,
+    ctl: ServerCtl,
     handle: Handle,
 }
 
@@ -270,6 +271,7 @@ impl Client {
         // while. We construct it back once the message is passed on.
         let idmap = self.idmap;
         let handle = self.handle;
+        let ctl = self.ctl;
         let msg = Message::request(method, params);
         let id = match msg {
             Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
@@ -311,6 +313,7 @@ impl Client {
                 let client = Client {
                     idmap: idmap,
                     sender: sender,
+                    ctl: ctl,
                     handle: handle,
                 };
                 (client, completed)
@@ -320,6 +323,7 @@ impl Client {
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
         let idmap = self.idmap;
         let handle = self.handle;
+        let ctl = self.ctl;
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
@@ -327,10 +331,14 @@ impl Client {
                 Client {
                     idmap: idmap,
                     sender: sender,
+                    ctl: ctl,
                     handle: handle,
                 }
             });
         Box::new(future)
+    }
+    pub fn server_ctl(&self) -> &ServerCtl {
+        &self.ctl
     }
 }
 
@@ -342,9 +350,14 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     let (terminator_sender, terminator_receiver) = relay_channel();
     let (sender, receiver) = channel(32);
     let idmap = Rc::new(RefCell::new(HashMap::new()));
+    let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
+        stop: false,
+        terminator: Some(terminator_sender),
+    })));
     let client = Client {
         idmap: idmap.clone(),
         sender: sender,
+        ctl: ctl.clone(),
         handle: handle.clone(),
     };
     let (sink, stream) = connection.split();
@@ -353,10 +366,6 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
 
     // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
 
-    let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-        stop: false,
-        terminator: Some(terminator_sender),
-    })));
     // A trick to terminate when the receiver fires. But we want to exhaust all the items that
     // are already produced. So we can't use select, we need to use this trick with Merge and an
     // infinite stream starting when the receiver fired.
