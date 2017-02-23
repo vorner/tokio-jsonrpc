@@ -31,6 +31,7 @@ use tokio_core::reactor::{Handle, Timeout};
 struct ServerCtlInternal {
     stop: bool,
     terminator: Option<RelaySender<()>>,
+    killer: Option<RelaySender<()>>,
 }
 
 /// A handle to control the server
@@ -49,6 +50,15 @@ impl ServerCtl {
         internal.stop = true;
         // The option might be None, but only after we called it already.
         (&mut internal.terminator).take().map(|s| s.complete(()));
+    }
+    /// Kill the connection
+    ///
+    /// Like, right now. Without a goodbye.
+    pub fn kill(&self) {
+        let mut internal = self.0.borrow_mut();
+        internal.stop = true;
+        // The option might be None, but only after we called it already.
+        (&mut internal.killer).take().map(|s| s.complete(()));
     }
 }
 
@@ -348,11 +358,13 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
           RPCServer: Server + 'static
 {
     let (terminator_sender, terminator_receiver) = relay_channel();
+    let (killer_sender, killer_receiver) = relay_channel();
     let (sender, receiver) = channel(32);
     let idmap = Rc::new(RefCell::new(HashMap::new()));
     let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
         stop: false,
         terminator: Some(terminator_sender),
+        killer: Some(killer_sender),
     })));
     let client = Client {
         idmap: idmap.clone(),
@@ -369,8 +381,7 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     // A trick to terminate when the receiver fires. But we want to exhaust all the items that
     // are already produced. So we can't use select, we need to use this trick with Merge and an
     // infinite stream starting when the receiver fired.
-    let terminator_stream = terminator_receiver.into_future()
-        .map(|_| repeat(()))
+    let terminator_stream = terminator_receiver.map(|_| repeat(()))
         .flatten_stream()
         .map_err(shouldnt_happen);
     let answers = stream.map(move |parsed| do_msg(&server, &ctl, &idmap, parsed))
@@ -389,8 +400,16 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
         })
         .buffer_unordered(4)
         .filter_map(|message| message);
+    let killer_stream = killer_receiver.map(|_| stream::once(Ok(None)))
+        .flatten_stream()
+        .map_err(shouldnt_happen);
     // Take both the client RPCs and the answers
-    let outbound = answers.select(receiver.map_err(shouldnt_happen));
+    let outbound = answers.select(receiver.map_err(shouldnt_happen))
+        // And kill them both if asked to
+        .map(Some)
+        .select(killer_stream)
+        .take_while(|m| Ok(m.is_some()))
+        .map(Option::unwrap);
     // And send them all
     let transmitted = sink.send_all(outbound);
     // Once the last thing is sent, we're done

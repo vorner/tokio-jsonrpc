@@ -2,5 +2,5 @@
 • Builder for the endpoint
 • Update documentation, Endpoint is no longer a struct.
 • Consider making the client and the futures it returs Send
-• Add an option to forcefully close the connection
+• What happens when the connection is killed with the unanswered RPCs?
 • Inactivity timeout for the server
