@@ -3,4 +3,5 @@
 • Update documentation, Endpoint is no longer a struct.
 • Consider making the client and the futures it returs Send
 • What happens when the connection is killed with the unanswered RPCs?
+• When the server is no longer active, what happens to the connection after all the RPCs are answered and client is dropped?
 • Inactivity timeout for the server
