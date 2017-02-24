@@ -366,60 +366,79 @@ impl Client {
     }
 }
 
-// TODO: Some other interface to this? A builder?
-// TODO: Description how this works.
-// TODO: Some cleanup. This looks a *bit* hairy and complex.
-pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, server: RPCServer) -> Client
+pub struct Endpoint<Connection, RPCServer> {
+    connection: Connection,
+    server: RPCServer,
+    parallel: usize,
+}
+
+impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
           RPCServer: Server + 'static
 {
-    let (terminator_sender, terminator_receiver) = relay_channel();
-    let (killer_sender, killer_receiver) = relay_channel();
-    let (sender, receiver) = channel(32);
-    let idmap = Rc::new(RefCell::new(HashMap::new()));
-    let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
-    let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-        stop: false,
-        terminator: Some(rc_terminator.clone()),
-        killer: Some(killer_sender),
-    })));
-    let client = Client {
-        sender: sender,
-        data: ClientData {
-            idmap: idmap.clone(),
-            ctl: ctl.clone(),
-            handle: handle.clone(),
-            terminator: rc_terminator,
-        },
-    };
-    let (sink, stream) = connection.split();
-    // Create a future for each received item that'll return something. Run some of them in
-    // parallel.
+    pub fn new(connection: Connection, server: RPCServer) -> Self {
+        Endpoint {
+            connection: connection,
+            server: server,
+            parallel: 1,
+        }
+    }
+    pub fn parallel(self, parallel: usize) -> Self {
+        Endpoint { parallel: parallel, ..self }
+    }
+    // TODO: Description how this works.
+    // TODO: Some cleanup. This looks a *bit* hairy and complex.
+    pub fn start(self, handle: Handle) -> Client {
+        let (terminator_sender, terminator_receiver) = relay_channel();
+        let (killer_sender, killer_receiver) = relay_channel();
+        let (sender, receiver) = channel(32);
+        let idmap = Rc::new(RefCell::new(HashMap::new()));
+        let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
+        let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
+            stop: false,
+            terminator: Some(rc_terminator.clone()),
+            killer: Some(killer_sender),
+        })));
+        let client = Client {
+            sender: sender,
+            data: ClientData {
+                idmap: idmap.clone(),
+                ctl: ctl.clone(),
+                handle: handle.clone(),
+                terminator: rc_terminator,
+            },
+        };
+        let (sink, stream) = self.connection.split();
+        // Create a future for each received item that'll return something. Run some of them in
+        // parallel.
 
-    // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
+        // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
 
-    // A trick to terminate when the receiver fires. But we want to exhaust all the items that
-    // are already produced. So we can't use select, we need to use this trick with Merge and an
-    // infinite stream starting when the receiver fired.
-    let terminator = terminator_receiver.map(|_| None)
-        .map_err(shouldnt_happen)
-        .into_stream();
-    let answers = stream.map(Some)
-        .select(terminator)
-        .take_while(|m| Ok(m.is_some()))
-        .map(move |parsed| do_msg(&server, &ctl, &idmap, parsed.unwrap()))
-        .flatten()
-        .buffer_unordered(4)
-        .filter_map(|message| message);
-    // Take both the client RPCs and the answers
-    let outbound = answers.select(receiver.map_err(shouldnt_happen));
-    // And send them all (or kill it, if it happens first)
-    let transmitted = sink.send_all(outbound)
-        .map(|_| ())
-        .map_err(|_| ())
-        .select(killer_receiver.map_err(|_| ()));
-    // Once the last thing is sent, we're done
-    // TODO: Something with the errors
-    handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
-    client
+        // A trick to terminate when the receiver fires. But we want to exhaust all the items that
+        // are already produced. So we can't use select, we need to use this trick with Merge and an
+        // infinite stream starting when the receiver fired.
+        let terminator = terminator_receiver.map(|_| None)
+            .map_err(shouldnt_happen)
+            .into_stream();
+        // Move out of self, otherwise the closure captures self, not only server :-|
+        let server = self.server;
+        let answers = stream.map(Some)
+            .select(terminator)
+            .take_while(|m| Ok(m.is_some()))
+            .map(move |parsed| do_msg(&server, &ctl, &idmap, parsed.unwrap()))
+            .flatten()
+            .buffer_unordered(self.parallel)
+            .filter_map(|message| message);
+        // Take both the client RPCs and the answers
+        let outbound = answers.select(receiver.map_err(shouldnt_happen));
+        // And send them all (or kill it, if it happens first)
+        let transmitted = sink.send_all(outbound)
+            .map(|_| ())
+            .map_err(|_| ())
+            .select(killer_receiver.map_err(|_| ()));
+        // Once the last thing is sent, we're done
+        // TODO: Something with the errors
+        handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
+        client
+    }
 }
