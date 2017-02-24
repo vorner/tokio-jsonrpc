@@ -442,3 +442,11 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         client
     }
 }
+
+impl<Connection> Endpoint<Connection, EmptyServer>
+    where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static
+{
+    pub fn client_only(connection: Connection) -> Self {
+        Self::new(connection, EmptyServer)
+    }
+}
