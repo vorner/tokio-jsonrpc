@@ -25,7 +25,7 @@ use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
 use futures::stream::{self, Once, empty};
 use futures_mpsc::{channel, Sender};
-use relay::{channel as relay_channel, Sender as RelaySender};
+use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
 use tokio_core::reactor::{Handle, Timeout};
 
 struct DropTerminator(Option<RelaySender<()>>);
@@ -388,8 +388,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     }
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
-    // TODO: Some future for a possible error?
-    pub fn start(self, handle: Handle) -> (Client, ServerCtl) {
+    pub fn start(self, handle: Handle) -> (Client, ServerCtl, RelayReceiver<Option<IoError>>) {
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
         let (sender, receiver) = channel(32);
@@ -433,15 +432,24 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             .filter_map(|message| message);
         // Take both the client RPCs and the answers
         let outbound = answers.select(receiver.map_err(shouldnt_happen));
+        let (error_sender, error_receiver) = relay_channel::<Option<IoError>>();
         // And send them all (or kill it, if it happens first)
         let transmitted = sink.send_all(outbound)
             .map(|_| ())
-            .map_err(|_| ())
-            .select(killer_receiver.map_err(|_| ()));
+            .select(killer_receiver.map_err(shouldnt_happen))
+            .then(move |result| match result {
+                Ok(_) => {
+                    error_sender.complete(None);
+                    Ok(())
+                },
+                Err((e, _select_next)) => {
+                    error_sender.complete(Some(e));
+                    Err(())
+                },
+            });
         // Once the last thing is sent, we're done
-        // TODO: Something with the errors
-        handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
-        (client, ctl_cloned)
+        handle.spawn(transmitted);
+        (client, ctl_cloned, error_receiver)
     }
 }
 
