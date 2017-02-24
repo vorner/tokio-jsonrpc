@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use serde::Serialize;
 use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
+use futures::future::Either;
 use futures::stream::{self, Once, empty};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
@@ -191,15 +192,13 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, id
             // stream types, this seems the best we can do.
             let all_sent = do_msg(server, ctl, idmap, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
                 let sender = sender.clone();
-                let msg_sent = future_message.and_then(move |response: Option<Message>| -> FutureMessage {
-                    match response {
-                        None => Box::new(Ok(None).into_future()),
-                        Some(msg) => {
-                            Box::new(sender.send(msg)
-                                .map_err(shouldnt_happen)
-                                .map(|_| None))
-                        },
-                    }
+                let msg_sent = future_message.and_then(move |response: Option<Message>| match response {
+                    None => Either::A(Ok(None).into_future()),
+                    Some(msg) => {
+                        Either::B(sender.send(msg)
+                            .map_err(shouldnt_happen)
+                            .map(|_| None))
+                    },
                 });
                 Ok(Box::new(msg_sent))
             });
