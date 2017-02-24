@@ -400,18 +400,13 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
         })
         .buffer_unordered(4)
         .filter_map(|message| message);
-    let killer_stream = killer_receiver.map(|_| stream::once(Ok(None)))
-        .flatten_stream()
-        .map_err(shouldnt_happen);
     // Take both the client RPCs and the answers
-    let outbound = answers.select(receiver.map_err(shouldnt_happen))
-        // And kill them both if asked to
-        .map(Some)
-        .select(killer_stream)
-        .take_while(|m| Ok(m.is_some()))
-        .map(Option::unwrap);
-    // And send them all
-    let transmitted = sink.send_all(outbound);
+    let outbound = answers.select(receiver.map_err(shouldnt_happen));
+    // And send them all (or kill it, if it happens first)
+    let transmitted = sink.send_all(outbound)
+        .map(|_| ())
+        .map_err(|_| ())
+        .select(killer_receiver.map_err(|_| ()));
     // Once the last thing is sent, we're done
     // TODO: Something with the errors
     handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
