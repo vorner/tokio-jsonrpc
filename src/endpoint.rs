@@ -388,7 +388,8 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     }
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
-    pub fn start(self, handle: Handle) -> Client {
+    // TODO: Some future for a possible error?
+    pub fn start(self, handle: Handle) -> (Client, ServerCtl) {
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
         let (sender, receiver) = channel(32);
@@ -422,6 +423,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             .into_stream();
         // Move out of self, otherwise the closure captures self, not only server :-|
         let server = self.server;
+        let ctl_cloned = ctl.clone();
         let answers = stream.map(Some)
             .select(terminator)
             .take_while(|m| Ok(m.is_some()))
@@ -439,7 +441,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         // Once the last thing is sent, we're done
         // TODO: Something with the errors
         handle.spawn(transmitted.map(|_| ()).map_err(|_| ()));
-        client
+        (client, ctl_cloned)
     }
 }
 
