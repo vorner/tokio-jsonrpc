@@ -23,14 +23,24 @@ use std::cell::RefCell;
 use serde::Serialize;
 use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
-use futures::stream::{self, Once, empty, repeat, MergedItem};
+use futures::stream::{self, Once, empty};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
 use tokio_core::reactor::{Handle, Timeout};
 
+struct DropTerminator(Option<RelaySender<()>>);
+
+impl Drop for DropTerminator {
+    fn drop(&mut self) {
+        self.0.take().unwrap().complete(());
+    }
+}
+
+type RcDrop = Rc<DropTerminator>;
+
 struct ServerCtlInternal {
     stop: bool,
-    terminator: Option<RelaySender<()>>,
+    terminator: Option<RcDrop>,
     killer: Option<RelaySender<()>>,
 }
 
@@ -48,8 +58,8 @@ impl ServerCtl {
     pub fn terminate(&self) {
         let mut internal = self.0.borrow_mut();
         internal.stop = true;
-        // The option might be None, but only after we called it already.
-        (&mut internal.terminator).take().map(|s| s.complete(()));
+        // Drop the reference count for this one
+        (&mut internal.terminator).take();
     }
     /// Kill the connection
     ///
@@ -263,11 +273,17 @@ impl Server for EmptyServer {
 }
 
 #[derive(Clone)]
-pub struct Client {
+struct ClientData {
     idmap: IDMap,
-    sender: Sender<Message>,
     ctl: ServerCtl,
     handle: Handle,
+    terminator: RcDrop,
+}
+
+#[derive(Clone)]
+pub struct Client {
+    sender: Sender<Message>,
+    data: ClientData,
 }
 
 pub type Notified = BoxFuture<Client, IoError>;
@@ -279,9 +295,7 @@ impl Client {
     pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
-        let idmap = self.idmap;
-        let handle = self.handle;
-        let ctl = self.ctl;
+        let data = self.data;
         let msg = Message::request(method, params);
         let id = match msg {
             Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
@@ -292,11 +306,11 @@ impl Client {
         let completed: RPCFinished = match timeout {
             Some(time) => {
                 // If we were provided with a timeout, select what happens first.
-                let timeout = match Timeout::new(time, &handle) {
+                let timeout = match Timeout::new(time, &data.handle) {
                     Err(e) => return Box::new(Err(e).into_future()),
                     Ok(t) => t,
                 };
-                let idmap = idmap.clone();
+                let idmap = data.idmap.clone();
                 let id = id.clone();
                 let completed = timeout
                     .map(|_| None)
@@ -315,44 +329,46 @@ impl Client {
             // If we don't have the timeout, simply pass the future to get the response through.
             None => Box::new(received),
         };
-        idmap.borrow_mut().insert(id, sender);
+        data.idmap.borrow_mut().insert(id, sender);
+        // Ensure the connection is kept alive until the answer comes
+        let rc_terminator = data.terminator.clone();
         let sent = self.sender
             .send(msg)
             .map_err(shouldnt_happen)
             .map(move |sender| {
                 let client = Client {
-                    idmap: idmap,
                     sender: sender,
-                    ctl: ctl,
-                    handle: handle,
+                    data: data,
                 };
                 (client, completed)
+            })
+            .then(|r| {
+                drop(rc_terminator);
+                r
             });
         Box::new(sent)
     }
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
-        let idmap = self.idmap;
-        let handle = self.handle;
-        let ctl = self.ctl;
+        let data = self.data;
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
             .map(move |sender| {
                 Client {
-                    idmap: idmap,
                     sender: sender,
-                    ctl: ctl,
-                    handle: handle,
+                    data: data,
                 }
             });
         Box::new(future)
     }
     pub fn server_ctl(&self) -> &ServerCtl {
-        &self.ctl
+        &self.data.ctl
     }
 }
 
 // TODO: Some other interface to this? A builder?
+// TODO: Description how this works.
+// TODO: Some cleanup. This looks a *bit* hairy and complex.
 pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, server: RPCServer) -> Client
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
           RPCServer: Server + 'static
@@ -361,16 +377,20 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     let (killer_sender, killer_receiver) = relay_channel();
     let (sender, receiver) = channel(32);
     let idmap = Rc::new(RefCell::new(HashMap::new()));
+    let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
     let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
         stop: false,
-        terminator: Some(terminator_sender),
+        terminator: Some(rc_terminator.clone()),
         killer: Some(killer_sender),
     })));
     let client = Client {
-        idmap: idmap.clone(),
         sender: sender,
-        ctl: ctl.clone(),
-        handle: handle.clone(),
+        data: ClientData {
+            idmap: idmap.clone(),
+            ctl: ctl.clone(),
+            handle: handle.clone(),
+            terminator: rc_terminator,
+        },
     };
     let (sink, stream) = connection.split();
     // Create a future for each received item that'll return something. Run some of them in
@@ -381,23 +401,14 @@ pub fn endpoint<Connection, RPCServer>(handle: Handle, connection: Connection, s
     // A trick to terminate when the receiver fires. But we want to exhaust all the items that
     // are already produced. So we can't use select, we need to use this trick with Merge and an
     // infinite stream starting when the receiver fired.
-    let terminator_stream = terminator_receiver.map(|_| repeat(()))
-        .flatten_stream()
-        .map_err(shouldnt_happen);
-    let answers = stream.map(move |parsed| do_msg(&server, &ctl, &idmap, parsed))
+    let terminator = terminator_receiver.map(|_| None)
+        .map_err(shouldnt_happen)
+        .into_stream();
+    let answers = stream.map(Some)
+        .select(terminator)
+        .take_while(|m| Ok(m.is_some()))
+        .map(move |parsed| do_msg(&server, &ctl, &idmap, parsed.unwrap()))
         .flatten()
-        .merge(terminator_stream)
-        .take_while(|item| {
-            Ok(match *item {
-                MergedItem::Second(_) => false,
-                _ => true,
-            })
-        })
-        .map(|item| match item {
-            MergedItem::First(v) |
-            MergedItem::Both(v, _) => v,
-            MergedItem::Second(_) => unreachable!(),
-        })
         .buffer_unordered(4)
         .filter_map(|message| message);
     // Take both the client RPCs and the answers
