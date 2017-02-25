@@ -14,7 +14,7 @@
 
 use message::{Broken, Message, Parsed, Response, Request, Notification};
 
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{self, Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -301,7 +301,8 @@ impl Client {
             _ => unreachable!("We produce only string IDs"),
         };
         let (sender, receiver) = relay_channel();
-        let received = receiver.map_err(shouldnt_happen).map(Some);
+        let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
+            .map(Some);
         let completed: RPCFinished = match timeout {
             Some(time) => {
                 // If we were provided with a timeout, select what happens first.
@@ -422,6 +423,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         // Move out of self, otherwise the closure captures self, not only server :-|
         let server = self.server;
         let ctl_cloned = ctl.clone();
+        let idmap_cloned = idmap.clone();
         let answers = stream.map(Some)
             .select(terminator)
             .take_while(|m| Ok(m.is_some()))
@@ -436,15 +438,19 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         let transmitted = sink.send_all(outbound)
             .map(|_| ())
             .select(killer_receiver.map_err(shouldnt_happen))
-            .then(move |result| match result {
-                Ok(_) => {
-                    error_sender.complete(None);
-                    Ok(())
-                },
-                Err((e, _select_next)) => {
-                    error_sender.complete(Some(e));
-                    Err(())
-                },
+            .then(move |result| {
+                // This will hopefully kill the futures
+                idmap_cloned.borrow_mut().clear();
+                match result {
+                    Ok(_) => {
+                        error_sender.complete(None);
+                        Ok(())
+                    },
+                    Err((e, _select_next)) => {
+                        error_sender.complete(Some(e));
+                        Err(())
+                    },
+                }
             });
         // Once the last thing is sent, we're done
         handle.spawn(transmitted);

@@ -2,4 +2,3 @@
 • Update documentation, Endpoint is no longer a struct.
 • Consider making the client and the futures it returs Send (or only when asked for it?)
 • Inactivity timeout for the server
-• Kill unanswered RPCs when the connection is dropped (or check it happens ‒ it might)
