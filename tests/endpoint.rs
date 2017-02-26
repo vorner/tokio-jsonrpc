@@ -175,3 +175,45 @@ fn wrong_method() {
     };
     reactor.run(both).unwrap();
 }
+
+/// Test we can get a timeout if the method takes a long time.
+#[test]
+fn timeout() {
+    let (mut reactor, s1, s2) = prepare();
+    let both = {
+        // Run in a sub-block, so we drop all the clients, etc.
+        let handle = reactor.handle();
+        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
+        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
+        let client_finished = client.call("timeout".to_owned(), Some(json!([3, 0])), Some(Duration::new(1, 0)))
+            .and_then(|(_client, answered)| answered)
+            .map(|response| assert!(response.is_none()));
+        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
+            .join(client_finished)
+            .map(|_| ())
+            .map_err(|e| panic!("{:?}", e))
+    };
+    reactor.run(both).unwrap();
+}
+
+/// Test the server works even when there are some methods taking some time
+#[test]
+fn delayed() {
+    let (mut reactor, s1, s2) = prepare();
+    let both = {
+        // Run in a sub-block, so we drop all the clients, etc.
+        let handle = reactor.handle();
+        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
+        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
+        let client_finished = client.call("timeout".to_owned(), Some(json!([0, 500000])), Some(Duration::new(1, 0)))
+            .and_then(|(_client, answered)| answered)
+            .map(|response| assert!(response.unwrap().result.unwrap().as_bool().unwrap()));
+        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
+            .join(client_finished)
+            .map(|_| ())
+            .map_err(|e| panic!("{:?}", e))
+    };
+    reactor.run(both).unwrap();
+}
+
+// TODO: Check running in parallel
