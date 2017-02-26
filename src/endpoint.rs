@@ -73,6 +73,8 @@ impl ServerCtl {
     }
 }
 
+pub type ServerError = (i64, String, Option<Value>);
+
 /// The server endpoint
 ///
 /// This is usually implemented by the end application and provides the actual functionality of the
@@ -92,7 +94,7 @@ pub trait Server {
     ///
     /// Once the future resolves, the value or error is sent to the client as the reply. The reply
     /// is wrapped automatically.
-    type RPCCallResult: IntoFuture<Item = Self::Success, Error = (i64, String, Option<Value>)>;
+    type RPCCallResult: IntoFuture<Item = Self::Success, Error = ServerError>;
     /// The result of the RPC call
     ///
     /// As the client doesn't expect anything in return, both the success and error results are
@@ -264,7 +266,7 @@ pub struct EmptyServer;
 
 impl Server for EmptyServer {
     type Success = ();
-    type RPCCallResult = Result<(), (i64, String, Option<Value>)>;
+    type RPCCallResult = Result<(), ServerError>;
     type NotificationResult = Result<(), ()>;
     fn initialized(&self, ctl: &ServerCtl) {
         ctl.terminate();
@@ -388,7 +390,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     }
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
-    pub fn start(self, handle: Handle) -> (Client, ServerCtl, RelayReceiver<Option<IoError>>) {
+    pub fn start(self, handle: &Handle) -> (Client, ServerCtl, RelayReceiver<Option<IoError>>) {
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
         let (sender, receiver) = channel(32);

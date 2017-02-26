@@ -62,3 +62,4 @@ pub mod endpoint;
 
 pub use message::{Message, Parsed};
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
+pub use endpoint::{Endpoint, Server, ServerCtl, ServerError};
