@@ -15,12 +15,14 @@ use std::time::Duration;
 use std::io::{Error as IoError, ErrorKind};
 
 use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, ServerError};
+use tokio_jsonrpc::message::RPCError;
 
 use futures::{Future, Stream};
-use tokio_core::reactor::{Core, Timeout};
+use futures::future::BoxFuture;
+use tokio_core::reactor::{Core, Timeout, Handle};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
-use serde_json::Value;
+use serde_json::{Value, to_value, from_value};
 
 struct AnswerServer;
 
@@ -110,6 +112,62 @@ fn notification() {
         let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
         let client_finished = client.notify("notif".to_owned(), None)
             .and_then(|_client| Ok(()));
+        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
+            .join(client_finished)
+            .map(|_| ())
+            .map_err(|e| panic!("{:?}", e))
+    };
+    reactor.run(both).unwrap();
+}
+
+struct AnotherServer(Handle);
+
+/// Another testing server
+///
+/// It answers the RPC "timeout" with waiting that as long as is provided in the first and second
+/// argument (seconds and microseconds) and then sending true back. It rejects all other methods.
+/// It terminates on receiving any method.
+impl Server for AnotherServer {
+    type Success = bool;
+    type RPCCallResult = BoxFuture<bool, ServerError>;
+    type NotificationResult = Result<(), ()>;
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
+        ctl.terminate();
+        if method == "timeout" {
+            let params: Vec<u64> = from_value(params.as_ref().unwrap().clone()).unwrap();
+            let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
+                .unwrap()
+                .map(|_| true)
+                .map_err(|e| (-32000, "Server error".to_owned(), Some(to_value(format!("{}", e)).unwrap())))
+                .boxed();
+            Some(timeout)
+        } else {
+            None
+        }
+    }
+}
+
+/// Test where we call a non-existant method
+///
+/// And we get a proper error.
+#[test]
+fn wrong_method() {
+    let (mut reactor, s1, s2) = prepare();
+    let both = {
+        // Run in a sub-block, so we drop all the clients, etc.
+        let handle = reactor.handle();
+        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
+        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
+        let client_finished = client.call("wrong".to_owned(), None, None)
+            .and_then(|(_client, answered)| answered)
+            .map(|response| {
+                assert_eq!(RPCError {
+                               code: -32601,
+                               message: "Method not found".to_owned(),
+                               data: Some(json!("wrong")),
+                           },
+                           response.unwrap().result.unwrap_err());
+            });
         server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
             .join(client_finished)
             .map(|_| ())

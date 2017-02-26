@@ -149,7 +149,7 @@ fn shouldnt_happen<E>(_: E) -> IoError {
 
 fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, request: Request) -> FutureMessage {
     match server.rpc(ctl, &request.method, &request.params) {
-        None => Box::new(Ok(Some(Message::error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
+        None => Box::new(Ok(Some(request.error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
         Some(future) => {
             Box::new(future.into_future().then(move |result| match result {
                 Err((code, msg, data)) => Ok(Some(request.error(code, msg, data))),
