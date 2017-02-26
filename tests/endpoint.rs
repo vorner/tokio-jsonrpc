@@ -57,9 +57,7 @@ fn prepare() -> (Core, Framed<TcpStream, LineCodec>, Framed<TcpStream, LineCodec
     // Kill the test if it gets stuck
     let timeout = Timeout::new(Duration::new(15, 0), &handle)
         .unwrap()
-        .then(|_| -> Result<(), ()> {
-            panic!("Timeout happened")
-        });
+        .then(|_| -> Result<(), ()> { panic!("Timeout happened") });
     handle.spawn(timeout);
     // Build two connected TCP streams
     let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap(), &handle).unwrap();
@@ -93,11 +91,10 @@ fn rpc_answer() {
         let client_finished = client.call("test".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()));
-        let both = server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
+        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
             .join(client_finished)
             .map(|_| ())
-            .map_err(|e| panic!("{:?}", e));
-        both
+            .map_err(|e| panic!("{:?}", e))
     };
     reactor.run(both).unwrap();
 }
@@ -113,11 +110,10 @@ fn notification() {
         let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
         let client_finished = client.notify("notif".to_owned(), None)
             .and_then(|_client| Ok(()));
-        let both = server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
+        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
             .join(client_finished)
             .map(|_| ())
-            .map_err(|e| panic!("{:?}", e));
-        both
+            .map_err(|e| panic!("{:?}", e))
     };
     reactor.run(both).unwrap();
 }
