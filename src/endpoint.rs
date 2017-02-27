@@ -24,7 +24,7 @@ use serde::Serialize;
 use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
 use futures::future::Either;
-use futures::stream::{self, Once, empty};
+use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
 use tokio_core::reactor::{Handle, Timeout};
@@ -159,7 +159,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, 
     }
 }
 
-fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl, notification: Notification) -> FutureMessage {
+fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl, notification: &Notification) -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => Box::new(Ok(None).into_future()),
         Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
@@ -250,7 +250,7 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idma
                 Box::new(once(err))
             },
             Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req))),
-            Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, ctl, notif))),
+            Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, ctl, &notif))),
             Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, batch),
             Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, idmap, Err(Broken::Unmatched(value))),
             Ok(Message::Response(response)) => do_response(idmap, response),
@@ -303,8 +303,13 @@ impl Client {
             _ => unreachable!("We produce only string IDs"),
         };
         let (sender, receiver) = relay_channel();
+        let rc_terminator = data.terminator.clone();
         let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
-            .map(Some);
+            .map(Some)
+            .then(move |r| {
+                drop(rc_terminator);
+                r
+            });
         let completed: RPCFinished = match timeout {
             Some(time) => {
                 // If we were provided with a timeout, select what happens first.
@@ -333,7 +338,6 @@ impl Client {
         };
         data.idmap.borrow_mut().insert(id, sender);
         // Ensure the connection is kept alive until the answer comes
-        let rc_terminator = data.terminator.clone();
         let sent = self.sender
             .send(msg)
             .map_err(shouldnt_happen)
@@ -343,10 +347,6 @@ impl Client {
                     data: data,
                 };
                 (client, completed)
-            })
-            .then(|r| {
-                drop(rc_terminator);
-                r
             });
         Box::new(sent)
     }
@@ -416,17 +416,25 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
 
         // TODO: Have a concrete enum-type for the futures so we don't have to allocate and box it.
 
-        // A trick to terminate when the receiver fires. But we want to exhaust all the items that
-        // are already produced. So we can't use select, we need to use this trick with Merge and an
-        // infinite stream starting when the receiver fired.
+        // A trick to terminate when the receiver fires. We mix a None into the stream from another
+        // stream and stop when we find it, as a marker.
         let terminator = terminator_receiver.map(|_| None)
             .map_err(shouldnt_happen)
             .into_stream();
         // Move out of self, otherwise the closure captures self, not only server :-|
         let server = self.server;
+        server.initialized(&ctl);
         let ctl_cloned = ctl.clone();
         let idmap_cloned = idmap.clone();
+        // A stream that contains no elements, but cleans the idmap once called (to kill the RPC
+        // futures)
+        let cleaner = unfold((), move |_| -> Option<Result<_, _>> {
+            idmap_cloned.borrow_mut().clear();
+            None
+        });
+        let idmap_cloned = idmap.clone();
         let answers = stream.map(Some)
+            .chain(cleaner)
             .select(terminator)
             .take_while(|m| Ok(m.is_some()))
             .map(move |parsed| do_msg(&server, &ctl, &idmap, parsed.unwrap()))
@@ -441,7 +449,8 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             .map(|_| ())
             .select(killer_receiver.map_err(shouldnt_happen))
             .then(move |result| {
-                // This will hopefully kill the futures
+                // This will hopefully kill the RPC futures
+                // We kill on both ends, because we may kill the connection or the other side may.
                 idmap_cloned.borrow_mut().clear();
                 match result {
                     Ok(_) => {
