@@ -62,7 +62,10 @@ impl Codec for Line {
         }
     }
     fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
-        *buf = to_vec(&msg).map_err(err_map)?;
+        let mut encoded = to_vec(&msg).map_err(err_map)?;
+        // As discovered the hard way, we must not overwrite buf, but append to it.
+        buf.reserve(encoded.len() + 1);
+        buf.append(&mut encoded);
         buf.push(b'\n');
         Ok(())
     }

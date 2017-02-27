@@ -33,6 +33,7 @@ struct DropTerminator(Option<RelaySender<()>>);
 
 impl Drop for DropTerminator {
     fn drop(&mut self) {
+        println!("Dropping");
         self.0.take().unwrap().complete(());
     }
 }
@@ -57,6 +58,7 @@ impl ServerCtl {
     ///
     /// Also terminate the connection if the client handle has been dropped.
     pub fn terminate(&self) {
+        println!("Terminating");
         let mut internal = self.0.borrow_mut();
         internal.stop = true;
         // Drop the reference count for this one
@@ -66,6 +68,7 @@ impl ServerCtl {
     ///
     /// Like, right now. Without a goodbye.
     pub fn kill(&self) {
+        println!("Killing");
         let mut internal = self.0.borrow_mut();
         internal.stop = true;
         // The option might be None, but only after we called it already.
@@ -237,6 +240,7 @@ fn do_response(idmap: &IDMap, response: Response) -> FutureMessageStream {
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
 fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap, msg: Parsed) -> FutureMessageStream {
+    println!("MSG: {:?}", msg);
     let terminated = ctl.0.borrow().stop;
     if terminated {
         if let Ok(Message::Response(response)) = msg {
@@ -303,8 +307,14 @@ impl Client {
             _ => unreachable!("We produce only string IDs"),
         };
         let (sender, receiver) = relay_channel();
+        let rc_terminator = data.terminator.clone();
         let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
-            .map(Some);
+            .map(Some)
+            .then(move |r| {
+                print!("Answer received");
+                drop(rc_terminator);
+                r
+            });
         let completed: RPCFinished = match timeout {
             Some(time) => {
                 // If we were provided with a timeout, select what happens first.
@@ -333,7 +343,6 @@ impl Client {
         };
         data.idmap.borrow_mut().insert(id, sender);
         // Ensure the connection is kept alive until the answer comes
-        let rc_terminator = data.terminator.clone();
         let sent = self.sender
             .send(msg)
             .map_err(shouldnt_happen)
@@ -343,10 +352,6 @@ impl Client {
                     data: data,
                 };
                 (client, completed)
-            })
-            .then(|r| {
-                drop(rc_terminator);
-                r
             });
         Box::new(sent)
     }
@@ -424,6 +429,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             .into_stream();
         // Move out of self, otherwise the closure captures self, not only server :-|
         let server = self.server;
+        server.initialized(&ctl);
         let ctl_cloned = ctl.clone();
         let idmap_cloned = idmap.clone();
         let answers = stream.map(Some)
@@ -441,6 +447,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             .map(|_| ())
             .select(killer_receiver.map_err(shouldnt_happen))
             .then(move |result| {
+                println!("Cleanup");
                 // This will hopefully kill the futures
                 idmap_cloned.borrow_mut().clear();
                 match result {

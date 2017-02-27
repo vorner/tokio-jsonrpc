@@ -8,17 +8,21 @@
 extern crate tokio_jsonrpc;
 extern crate tokio_core;
 extern crate futures;
+extern crate relay;
 #[macro_use]
 extern crate serde_json;
 
 use std::time::Duration;
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{Error as IoError};
+use std::cell::Cell;
+use std::rc::Rc;
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, ServerError};
+use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, ServerError};
 use tokio_jsonrpc::message::RPCError;
 
 use futures::{Future, Stream};
 use futures::future::BoxFuture;
+use relay::Receiver as RelayReceiver;
 use tokio_core::reactor::{Core, Timeout, Handle};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
@@ -78,6 +82,19 @@ fn prepare() -> (Core, Framed<TcpStream, LineCodec>, Framed<TcpStream, LineCodec
     (reactor, s1.framed(LineCodec::new()), s2.framed(LineCodec::new()))
 }
 
+/// Preprocess the tripple returned by .start
+///
+/// So the error is checked that it didn't happen.
+fn process_start(params: (Client, ServerCtl, RelayReceiver<Option<IoError>>)) -> (Client, ServerCtl, Box<Future<Item = (), Error = IoError>>) {
+    let (client, ctl, finished) = params;
+    let receiver = finished
+        .map(|maybe_error| {
+            assert!(maybe_error.is_none());
+        })
+        .map_err(|_| panic!("Canceled"));
+    (client, ctl, Box::new(receiver))
+}
+
 /// Single RPC call
 ///
 /// Run both the server and client, send a request and wait for the answer. The server terminates
@@ -85,54 +102,53 @@ fn prepare() -> (Core, Framed<TcpStream, LineCodec>, Framed<TcpStream, LineCodec
 #[test]
 fn rpc_answer() {
     let (mut reactor, s1, s2) = prepare();
-    let both = {
+    let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnswerServer).start(&handle);
-        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
-        let client_finished = client.call("test".to_owned(), None, None)
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("test".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
-            .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()));
-        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
-            .join(client_finished)
-            .map(|_| ())
-            .map_err(|e| panic!("{:?}", e))
+            .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()))
+            .join3(server_finished, client_endpoint_finished)
     };
-    reactor.run(both).unwrap();
+    reactor.run(all).unwrap();
 }
 
 /// Send a notification to the server.
 #[test]
 fn notification() {
     let (mut reactor, s1, s2) = prepare();
-    let both = {
+    let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnswerServer).start(&handle);
-        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
-        let client_finished = client.notify("notif".to_owned(), None)
-            .and_then(|_client| Ok(()));
-        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
-            .join(client_finished)
-            .map(|_| ())
-            .map_err(|e| panic!("{:?}", e))
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.notify("notif".to_owned(), None)
+            .and_then(|_client| Ok(()))
+            .join3(server_finished, client_endpoint_finished)
     };
-    reactor.run(both).unwrap();
+    reactor.run(all).unwrap();
 }
 
-struct AnotherServer(Handle);
+struct AnotherServer(Handle, Cell<usize>);
 
 /// Another testing server
 ///
 /// It answers the RPC "timeout" with waiting that as long as is provided in the first and second
 /// argument (seconds and microseconds) and then sending true back. It rejects all other methods.
-/// It terminates on receiving any method.
+/// It terminates after receiving .1 requests.
 impl Server for AnotherServer {
     type Success = bool;
     type RPCCallResult = BoxFuture<bool, ServerError>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
-        ctl.terminate();
+        let mut num = self.1.get();
+        num -= 1;
+        self.1.set(num);
+        if num == 0 {
+            ctl.terminate();
+        }
         if method == "timeout" {
             let params: Vec<u64> = from_value(params.as_ref().unwrap().clone()).unwrap();
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
@@ -153,12 +169,12 @@ impl Server for AnotherServer {
 #[test]
 fn wrong_method() {
     let (mut reactor, s1, s2) = prepare();
-    let both = {
+    let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
-        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
-        let client_finished = client.call("wrong".to_owned(), None, None)
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("wrong".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(|response| {
                 assert_eq!(RPCError {
@@ -167,53 +183,133 @@ fn wrong_method() {
                                data: Some(json!("wrong")),
                            },
                            response.unwrap().result.unwrap_err());
-            });
-        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
-            .join(client_finished)
-            .map(|_| ())
-            .map_err(|e| panic!("{:?}", e))
+            })
+            .join3(server_finished, client_endpoint_finished)
     };
-    reactor.run(both).unwrap();
+    reactor.run(all).unwrap();
 }
 
 /// Test we can get a timeout if the method takes a long time.
 #[test]
 fn timeout() {
     let (mut reactor, s1, s2) = prepare();
-    let both = {
+    let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
-        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
-        let client_finished = client.call("timeout".to_owned(), Some(json!([3, 0])), Some(Duration::new(1, 0)))
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("timeout".to_owned(), Some(json!([3, 0])), Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
-            .map(|response| assert!(response.is_none()));
-        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
-            .join(client_finished)
-            .map(|_| ())
-            .map_err(|e| panic!("{:?}", e))
+            .map(|response| assert!(response.is_none()))
+            .join3(server_finished, client_endpoint_finished)
     };
-    reactor.run(both).unwrap();
+    reactor.run(all).unwrap();
 }
 
 /// Test the server works even when there are some methods taking some time
 #[test]
 fn delayed() {
     let (mut reactor, s1, s2) = prepare();
-    let both = {
+    let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = Endpoint::new(s1, AnotherServer(handle.clone())).start(&handle);
-        let (client, _ctl, _finished) = Endpoint::client_only(s2).start(&handle);
-        let client_finished = client.call("timeout".to_owned(), Some(json!([0, 500000])), Some(Duration::new(1, 0)))
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("timeout".to_owned(), Some(json!([0, 500000000])), Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
-            .map(|response| assert!(response.unwrap().result.unwrap().as_bool().unwrap()));
-        server_finished.map_err(|_| IoError::new(ErrorKind::Other, "Canceled"))
-            .join(client_finished)
-            .map(|_| ())
-            .map_err(|e| panic!("{:?}", e))
+            .map(|response| assert!(response.unwrap().result.unwrap().as_bool().unwrap()))
+            .join3(server_finished, client_endpoint_finished)
     };
-    reactor.run(both).unwrap();
+    reactor.run(all).unwrap();
 }
 
-// TODO: Check running in parallel
+/// Don't stop the server, wait only for the client
+///
+/// We check that the server works even if the finish future isn't waited for.
+#[test]
+fn client_only() {
+    let (mut reactor, s1, s2) = prepare();
+    let client = {
+        let handle = reactor.handle();
+        Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle);
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .and_then(|(_client, answered)| answered)
+            .map(move |response| {
+                response.as_ref().unwrap();
+                assert!(response.unwrap().result.unwrap().as_bool().unwrap());
+            })
+            .join(client_endpoint_finished)
+    };
+    reactor.run(client).unwrap();
+}
+
+/// Run two RPCs in parallel and see one can overtake the other
+#[test]
+fn parallel() {
+    let (mut reactor, s1, s2) = prepare();
+    let all = {
+        // Run in a sub-block, so we drop all the clients, etc.
+        let handle = reactor.handle();
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let first_finished = Rc::new(Cell::new(false));
+        let first_finished_cloned = first_finished.clone();
+        let client1_finished = client.clone()
+            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .and_then(|(_client, answered)| answered)
+            .map(move |response| {
+                assert!(response.unwrap().result.unwrap().as_bool().unwrap());
+                first_finished_cloned.set(true);
+            });
+        let client2_finished = client.call("wrong".to_owned(), None, None)
+            .and_then(|(_client, answered)| answered)
+            .map(move |response| {
+                assert_eq!(RPCError {
+                               code: -32601,
+                               message: "Method not found".to_owned(),
+                               data: Some(json!("wrong")),
+                           },
+                           response.unwrap().result.unwrap_err());
+                assert!(!first_finished.get());
+            });
+        server_finished.join4(client1_finished, client2_finished, client_endpoint_finished)
+    };
+    reactor.run(all).unwrap();
+}
+
+/// Similar to `parallel`, but doesn't allow running the RPCs in parallel
+///
+/// Also, send the second request after the client is received back from the asynchronous call.
+#[test]
+fn seq() {
+    let (mut reactor, s1, s2) = prepare();
+    let all = {
+        let handle = reactor.handle();
+        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle));
+        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .and_then(|(client, answered)| {
+                let first_finished = Rc::new(Cell::new(false));
+                let first_finished_cloned = first_finished.clone();
+                let client2_finished = client.call("wrong".to_owned(), None, None)
+                    .and_then(|(_client, answered)| answered)
+                    .map(move |response| {
+                        assert_eq!(RPCError {
+                                       code: -32601,
+                                       message: "Method not found".to_owned(),
+                                       data: Some(json!("wrong")),
+                                       },
+                                       response.unwrap().result.unwrap_err());
+                        assert!(!first_finished.get());
+                    });
+                answered.map(move |response| {
+                    assert!(response.unwrap().result.unwrap().as_bool().unwrap());
+                    first_finished_cloned.set(true);
+                })
+                .join(client2_finished)
+            })
+            .join3(server_finished, client_endpoint_finished)
+    };
+    reactor.run(all).unwrap();
+}
