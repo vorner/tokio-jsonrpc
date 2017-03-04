@@ -43,6 +43,10 @@ struct ServerCtlInternal {
     stop: bool,
     terminator: Option<RcDrop>,
     killer: Option<RelaySender<()>>,
+    // Info to be able to create new clients
+    idmap: IDMap,
+    handle: Handle,
+    sender: Option<Sender<Message>>,
 }
 
 /// A handle to control the server
@@ -53,23 +57,48 @@ struct ServerCtlInternal {
 pub struct ServerCtl(Rc<RefCell<ServerCtlInternal>>);
 
 impl ServerCtl {
+    /// Perform a cleanup when terminating in some way
+    ///
+    /// And perform some operation on the internal (access for convenience)
+    fn cleanup<R, F: FnOnce(&mut ServerCtlInternal) -> R>(&self, f: F) -> R {
+        let mut internal = self.0.borrow_mut();
+        internal.stop = true;
+        internal.sender.take();
+        f(&mut internal)
+    }
     /// Stop answering RPCs and calling notifications
     ///
     /// Also terminate the connection if the client handle has been dropped.
     pub fn terminate(&self) {
-        let mut internal = self.0.borrow_mut();
-        internal.stop = true;
-        // Drop the reference count for this one
-        (&mut internal.terminator).take();
+        self.cleanup(|internal| {
+            // Drop the reference count for this one
+            internal.terminator.take();
+        });
     }
     /// Kill the connection
     ///
     /// Like, right now. Without a goodbye.
     pub fn kill(&self) {
-        let mut internal = self.0.borrow_mut();
-        internal.stop = true;
-        // The option might be None, but only after we called it already.
-        (&mut internal.killer).take().map(|s| s.complete(()));
+        self.cleanup(|internal| {
+            // The option might be None, but only after we called it already.
+            internal.killer.take().map(|s| s.complete(()));
+        });
+    }
+    /// Create a new client for the current endpoint
+    ///
+    /// This is a way in which the server may access the other endpoint (eg. call RPCs or send
+    /// notifications to the other side).
+    ///
+    /// # Panics
+    ///
+    /// If called after `kill` or `terminate` has been called previously.
+    pub fn client(&self) -> Client {
+        let internal = self.0.borrow();
+        Client::new(&internal.idmap,
+                    self,
+                    &internal.handle,
+                    internal.terminator.as_ref().expect("`client` called after termination`"),
+                    internal.sender.as_ref().expect("`client` called after termination"))
     }
 }
 
@@ -292,6 +321,17 @@ pub type RPCFinished = BoxFuture<Option<Response>, IoError>;
 pub type RPCSent = BoxFuture<(Client, RPCFinished), IoError>;
 
 impl Client {
+    fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop, sender: &Sender<Message>) -> Self {
+        Client {
+            sender: sender.clone(),
+            data: ClientData {
+                idmap: idmap.clone(),
+                ctl: ctl.clone(),
+                handle: handle.clone(),
+                terminator: terminator.clone(),
+            },
+        }
+    }
     // TODO: This interface sounds a bit awkward.
     pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
@@ -400,6 +440,9 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             stop: false,
             terminator: Some(rc_terminator.clone()),
             killer: Some(killer_sender),
+            idmap: idmap.clone(),
+            handle: handle.clone(),
+            sender: Some(sender.clone()),
         })));
         let client = Client {
             sender: sender,

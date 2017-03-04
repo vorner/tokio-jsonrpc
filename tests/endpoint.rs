@@ -380,4 +380,24 @@ fn kill_client() {
     reactor.run(all).unwrap();
 }
 
+/// Test we can get a working client from the server ctl
+#[test]
+fn client_from_ctl() {
+    let (mut reactor, s1, s2) = prepare();
+    let all = {
+        let handle = reactor.handle();
+        let (_client, _ctl, server1_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        // We need to use a real server, otherwise the ctl would be already terminated
+        let (_client, ctl, server2_finished) = process_start(Endpoint::new(s2, AnswerServer).start(&handle));
+        let client = ctl.client();
+        // Terminate the client-side server
+        ctl.terminate();
+        client.call("test".to_owned(), None, None)
+            .and_then(|(_client, answered)| answered)
+            .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()))
+            .join3(server1_finished, server2_finished)
+    };
+    reactor.run(all).unwrap();
+}
+
 // TODO: Test the batches (we can't call batches now, can we?)
