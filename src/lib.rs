@@ -8,8 +8,9 @@
 //! A JSON RPC protocol for the [tokio](https://tokio.rs) framework.
 //!
 //! This implements the handling of the
-//! [JSON RPC 2.0](http://www.jsonrpc.org/specification) specification. Currently, only the
-//! low-level parts are implemented, more will come in future versions.
+//! [JSON RPC 2.0](http://www.jsonrpc.org/specification) specification. The low-level parts are in
+//! the [`message`](message/index.html) and the [`codec`](codec/index.html) modules. The first
+//! draft of the higher-lever API is in the [`endpoint`](endpoint/index.html) module.
 //!
 //! # Examples
 //!
@@ -39,6 +40,46 @@
 //!         }
 //!     });
 //!     handle.spawn(write.send_all(answers).map(|_| ()).map_err(|_| ()));
+//!     Ok(())
+//! });
+//! # }
+//! ```
+//!
+//! ```rust
+//! # extern crate tokio_core;
+//! # extern crate tokio_jsonrpc;
+//! # extern crate futures;
+//! # extern crate serde_json;
+//! #
+//! # use tokio_core::reactor::Core;
+//! # use tokio_core::net::TcpListener;
+//! # use tokio_core::io::Io;
+//! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RPCError, Endpoint};
+//! # use futures::{Stream, Sink, Future};
+//! # use serde_json::Value;
+//! #
+//! # fn main() {
+//! # let mut core = Core::new().unwrap();
+//! # let handle = core.handle();
+//! #
+//! # let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
+//! struct UselessServer;
+//!
+//! impl Server for UselessServer {
+//!     type Success = String;
+//!     type RPCCallResult = Result<String, RPCError>;
+//!     type NotificationResult = Result<(), ()>;
+//!     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
+//!         match method {
+//!             "hello" => Some(Ok("world".to_owned())),
+//!             _ => None
+//!         }
+//!     }
+//! }
+//!
+//! let connections = listener.incoming().for_each(|(stream, _)| {
+//!     let (client, _server_finished) = Endpoint::new(stream.framed(LineCodec::new()), UselessServer).start(&handle);
+//!     client.notify("hello".to_owned(), None);
 //!     Ok(())
 //! });
 //! # }

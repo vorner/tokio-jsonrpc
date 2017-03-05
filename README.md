@@ -15,6 +15,9 @@ Currently it contains the lower-level parts, parsing the messages and sending
 anwers. A small example how to use these can be found in the [echo
 params](examples/echo_params.rs) program.
 
+Also, a bit of higher level is there in the form of the `Endpoint` structure.
+The use can be examined in the [time server](examples/time_server.rs) program.
+
 The API documentation can be found [here](https://docs.rs/tokio-jsonrpc).
 
 ## License
