@@ -391,7 +391,7 @@ impl Server for MutualServer {
         if method == "ask" {
             let result = ctl.client()
                 .notify("terminate".to_owned(), None)
-                .map(|_| Value::String("Asked".to_owned())) // FIXME: Why does it fail with Value::Null? Problem parsing?
+                .map(|_| Value::Null)
                 .or_else(|e| RPCError::server_error(Some(format!("{}", e))));
             Some(Box::new(result))
         } else {

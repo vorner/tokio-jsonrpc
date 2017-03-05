@@ -135,12 +135,22 @@ impl Serialize for Response {
     }
 }
 
+/// Deserializer for `Option<Value>` that produces `Some(Value::Null)`
+///
+/// The usual one produces None in that case. But we need to know the difference between
+/// `{x: null}` and `{}`.
+fn some_value<D: Deserializer>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireResponse {
     // It is actually used to eat and sanity check the deserialized text
     #[allow(dead_code)]
     jsonrpc: Version,
+    // Make sure we accept null as Some(Value::Null), instead of going to None
+    #[serde(default, deserialize_with = "some_value")]
     result: Option<Value>,
     error: Option<RPCError>,
     id: Value,
@@ -354,6 +364,13 @@ mod tests {
             &Message::Response(Response {
                 jsonrpc: Version,
                 result: Ok(json!(42)),
+                id: json!(3),
+            }));
+        // A successful response
+        one(r#"{"jsonrpc": "2.0", "result": null, "id": 3}"#,
+            &Message::Response(Response {
+                jsonrpc: Version,
+                result: Ok(Value::Null),
                 id: json!(3),
             }));
         // An error
