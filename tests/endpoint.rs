@@ -17,8 +17,7 @@ use std::io::Error as IoError;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, ServerError};
-use tokio_jsonrpc::message::RPCError;
+use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, RPCError};
 
 use futures::{Future, Stream, IntoFuture};
 use futures::future::BoxFuture;
@@ -36,7 +35,7 @@ struct AnswerServer;
 /// `"notif"` as a notification. Both `rpc` and `notification` terminate the server.
 impl Server for AnswerServer {
     type Success = u32;
-    type RPCCallResult = Result<u32, ServerError>;
+    type RPCCallResult = Result<u32, RPCError>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
         ctl.terminate();
@@ -139,7 +138,7 @@ struct AnotherServer(Handle, Cell<usize>);
 /// It terminates after receiving .1 requests.
 impl Server for AnotherServer {
     type Success = bool;
-    type RPCCallResult = BoxFuture<bool, ServerError>;
+    type RPCCallResult = BoxFuture<bool, RPCError>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
         let mut num = self.1.get();
@@ -153,7 +152,7 @@ impl Server for AnotherServer {
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
                 .map(|_| true)
-                .or_else(|e| ServerError::server_error(Some(format!("{}", e))))
+                .or_else(|e| RPCError::server_error(Some(format!("{}", e))))
                 .boxed();
             Some(timeout)
         } else if method == "kill" {

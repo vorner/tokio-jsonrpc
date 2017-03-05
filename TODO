@@ -6,3 +6,7 @@
 • Finished might return some better error than canceled (everything uses IoError around here anyway)
 • Consider the .rpc and .notification to take references
 • Create a changelog
+• Batches on the client side
+• Fold in the example
+• Docs in the lib.rs and in the README
+• Don't return the server control, as it can be extracted from the client

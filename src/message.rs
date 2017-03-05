@@ -12,7 +12,7 @@
 
 use serde::ser::{Serialize, Serializer, SerializeStruct};
 use serde::de::{Deserialize, Deserializer, Unexpected, Error};
-use serde_json::Value;
+use serde_json::{Value, to_value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,17 @@ impl Request {
             id: self.id.clone(),
         })
     }
+    /// Answer the request with an error.
+    ///
+    /// It is like [`error`](#fn.error), but takes already created
+    /// [`RPCError`](struct.RPCError.html).
+    pub fn error_prepared(&self, error: RPCError) -> Message {
+        Message::Response(Response {
+            jsonrpc: Version,
+            result: Err(error),
+            id: self.id.clone(),
+        })
+    }
 }
 
 /// An error code
@@ -82,6 +93,25 @@ pub struct RPCError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+impl RPCError {
+    /// Create an Invalid Param error.
+    pub fn invalid_params<R>() -> Result<R, Self> {
+        Err(RPCError {
+            code: -32602,
+            message: "Invalid params".to_owned(),
+            data: None
+        })
+    }
+    /// Create a server error.
+    pub fn server_error<R, E: Serialize>(e: Option<E>) -> Result<R, Self> {
+        Err(RPCError {
+            code: -32000,
+            message: "Server error".to_owned(),
+            data: e.map(|v| to_value(v).expect("Must be representable in JSON"))
+        })
+    }
 }
 
 /// A response to an RPC

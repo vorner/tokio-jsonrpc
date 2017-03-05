@@ -21,7 +21,7 @@ extern crate futures;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, ServerError};
+use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, RPCError};
 
 use futures::{Future, Stream};
 use tokio_core::io::Io;
@@ -52,7 +52,7 @@ impl Server for TimeServer {
     ///
     /// As we have two different RPCs with different results, we use the generic Value.
     type Success = Value;
-    type RPCCallResult = Result<Value, ServerError>;
+    type RPCCallResult = Result<Value, RPCError>;
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
@@ -64,18 +64,18 @@ impl Server for TimeServer {
             "subscribe" => {
                 // Some parsing and bailing out on errors
                 if params.is_none() {
-                    return Some(ServerError::invalid_params());
+                    return Some(RPCError::invalid_params());
                 }
                 let s_params = match from_value::<SubscribeParams>(params.clone().unwrap()) {
                     Ok(p) => p,
-                    Err(_) => return Some(ServerError::invalid_params()),
+                    Err(_) => return Some(RPCError::invalid_params()),
                 };
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
                 // Get a stream that „ticks“
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
-                    .or_else(|e| ServerError::server_error(Some(format!("Can't start interval: {}", e))))
+                    .or_else(|e| RPCError::server_error(Some(format!("Can't start interval: {}", e))))
                     .map(move |interval| {
                         // And send the notification on each tick
                         let notified = interval.for_each(move |_| {

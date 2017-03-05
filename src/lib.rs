@@ -60,6 +60,6 @@ pub mod message;
 pub mod codec;
 pub mod endpoint;
 
-pub use message::{Message, Parsed};
+pub use message::{Message, Parsed, RPCError};
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
-pub use endpoint::{Endpoint, Client, Server, ServerCtl, ServerError};
+pub use endpoint::{Endpoint, Client, Server, ServerCtl};

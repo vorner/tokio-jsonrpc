@@ -9,10 +9,11 @@
 //!
 //! This module helps building the endpoints of the connection. The endpoints act as both client
 //! and server at the same time. If you want a client-only endpoint, use
-//! [`EmptyServer`](struct.EmptyServer.html) as the server. If you want a server-only endpoint,
+//! [`EmptyServer`](struct.EmptyServer.html) as the server or the relevant
+//! [`Endpoint`](struct.Endpoint.html)'s constructor. If you want a server-only endpoint,
 //! simply don't call any RPCs or notifications.
 
-use message::{Broken, Message, Parsed, Response, Request, Notification};
+use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
 
 use std::io::{self, Error as IoError, ErrorKind};
 use std::collections::HashMap;
@@ -29,6 +30,9 @@ use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
 use tokio_core::reactor::{Handle, Timeout};
 
+/// Thing that terminates the connection once dropped
+///
+/// A trick to terminate when all Rcs are forgotten.
 struct DropTerminator(Option<RelaySender<()>>);
 
 impl Drop for DropTerminator {
@@ -39,11 +43,17 @@ impl Drop for DropTerminator {
 
 type RcDrop = Rc<DropTerminator>;
 
+/// An internal part of ServerCtl
+///
+/// The ServerCtl is just a thin Rc wrapper around this.
 struct ServerCtlInternal {
+    // Stop processing requests
     stop: bool,
+    // Terminate the nice way (if all others also drop)
     terminator: Option<RcDrop>,
+    // Terminate right now
     killer: Option<RelaySender<()>>,
-    // Info to be able to create new clients
+    // Info to be able to create a new clients
     idmap: IDMap,
     handle: Handle,
     sender: Option<Sender<Message>>,
@@ -52,7 +62,8 @@ struct ServerCtlInternal {
 /// A handle to control the server
 ///
 /// An instance is provided to each [`Server`](trait.Server.html) callback and it can be used to
-/// manipulate the server (currently only to terminate the server).
+/// manipulate the server (currently only to terminate the server) or to create a client for the
+/// use of the server.
 #[derive(Clone)]
 pub struct ServerCtl(Rc<RefCell<ServerCtlInternal>>);
 
@@ -68,7 +79,8 @@ impl ServerCtl {
     }
     /// Stop answering RPCs and calling notifications
     ///
-    /// Also terminate the connection if the client handle has been dropped.
+    /// Also terminate the connection if the client handle has been dropped and all ongoing RPC
+    /// answers were received.
     pub fn terminate(&self) {
         self.cleanup(|internal| {
             // Drop the reference count for this one
@@ -102,19 +114,6 @@ impl ServerCtl {
     }
 }
 
-pub struct ServerError(pub i64, pub String, pub Option<Value>);
-
-impl ServerError {
-    pub fn invalid_params<R>() -> Result<R, Self> {
-        Err(ServerError(-32602, "Invalid params".to_owned(), None))
-    }
-    pub fn server_error<R, E: Serialize>(e: Option<E>) -> Result<R, Self> {
-        Err(ServerError(-32000,
-                        "Server error".to_owned(),
-                        e.map(|v| to_value(v).expect("Must be representable in JSON"))))
-    }
-}
-
 /// The server endpoint
 ///
 /// This is usually implemented by the end application and provides the actual functionality of the
@@ -124,8 +123,8 @@ impl ServerError {
 /// is up to the developer to handle conversion of parameters, etc.
 ///
 /// The default implementations of the callbacks return None, indicating that the given method is
-/// not known. It allows implementing only rpcs or only notifications without having to worry about
-/// the other callback. If you want a server that knows nothing at all, use
+/// not known. It allows implementing only RPCs or only notifications without having to worry about
+/// the other callback. If you want a server that does nothing at all, use
 /// [`EmptyServer`](struct.EmptyServer.html).
 pub trait Server {
     /// The successfull result of the RPC call.
@@ -134,7 +133,7 @@ pub trait Server {
     ///
     /// Once the future resolves, the value or error is sent to the client as the reply. The reply
     /// is wrapped automatically.
-    type RPCCallResult: IntoFuture<Item = Self::Success, Error = ServerError>;
+    type RPCCallResult: IntoFuture<Item = Self::Success, Error = RPCError>;
     /// The result of the RPC call
     ///
     /// As the client doesn't expect anything in return, both the success and error results are
@@ -192,7 +191,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, 
         None => Box::new(Ok(Some(request.error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
         Some(future) => {
             Box::new(future.into_future().then(move |result| match result {
-                Err(ServerError(code, msg, data)) => Ok(Some(request.error(code, msg, data))),
+                Err(err) => Ok(Some(request.error_prepared(err))),
                 Ok(result) => Ok(Some(request.reply(to_value(result).expect("Trying to return a value that can't be converted to JSON")))),
             }))
         },
@@ -306,21 +305,31 @@ pub struct EmptyServer;
 
 impl Server for EmptyServer {
     type Success = ();
-    type RPCCallResult = Result<(), ServerError>;
+    type RPCCallResult = Result<(), RPCError>;
     type NotificationResult = Result<(), ()>;
     fn initialized(&self, ctl: &ServerCtl) {
         ctl.terminate();
     }
 }
 
+/// Internal part of the client
+///
+/// Just for convenience, as we need to deconstruct and construct it repeatedly, so this way we
+/// have only one item extra.
 #[derive(Clone)]
 struct ClientData {
+    /// Mapping from IDs to the relays to wake up the recipient futures.
     idmap: IDMap,
+    /// The control of the server
     ctl: ServerCtl,
     handle: Handle,
+    /// Keep the connection alive as long as the client is alive
     terminator: RcDrop,
 }
 
+/// The client part of the endpoint
+///
+/// This can be used to call RPCs and send notifications to the other end.
 #[derive(Clone)]
 pub struct Client {
     sender: Sender<Message>,
@@ -332,6 +341,7 @@ pub type RPCFinished = BoxFuture<Option<Response>, IoError>;
 pub type RPCSent = BoxFuture<(Client, RPCFinished), IoError>;
 
 impl Client {
+    /// A constructor (a private one)
     fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop, sender: &Sender<Message>) -> Self {
         Client {
             sender: sender.clone(),
@@ -343,7 +353,12 @@ impl Client {
             },
         }
     }
-    // TODO: This interface sounds a bit awkward.
+    /// Call a RPC
+    ///
+    /// Construct an RPC message and send it to the other end. It returns a future that resolves
+    /// once the message is sent. It yields the Client back (it is blocked for the time of sending)
+    /// and another future that resolves once the answer is received (or once the connection is
+    /// lost, in which case the result is None).
     pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
@@ -401,6 +416,10 @@ impl Client {
             });
         Box::new(sent)
     }
+    /// Send a notification
+    ///
+    /// It creates a notification message and sends it. It returs a future that resolves once the
+    /// message is sent and yields the client back for further use.
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
         let data = self.data;
         let future = self.sender
@@ -414,11 +433,17 @@ impl Client {
             });
         Box::new(future)
     }
+    /// Get the server control
+    ///
+    /// That allows terminating the server, etc.
     pub fn server_ctl(&self) -> &ServerCtl {
         &self.data.ctl
     }
 }
 
+/// The builder structure for the end point
+///
+/// This is used to create the endpoint ‒ both the server and client part at once.
 pub struct Endpoint<Connection, RPCServer> {
     connection: Connection,
     server: RPCServer,
@@ -429,6 +454,9 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
           RPCServer: Server + 'static
 {
+    /// Create the endpoint
+    ///
+    /// Pass it the connection to build the endpoint on and the server to use internally.
     pub fn new(connection: Connection, server: RPCServer) -> Self {
         Endpoint {
             connection: connection,
@@ -436,9 +464,22 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             parallel: 1,
         }
     }
+    /// Set how many RPCs may be process in parallel
+    ///
+    /// As the RPC may be a future, it is possible to have multiple of them in the pipeline at
+    /// once. By default, no parallelism is allowed on one endpoint. Calling this sets how many
+    /// parallel endpoints there may be.
     pub fn parallel(self, parallel: usize) -> Self {
         Endpoint { parallel: parallel, ..self }
     }
+    /// Start the endpoint
+    ///
+    /// Once all configuration is set, this creates the actual endpoint pair ‒ both the server and
+    /// the client. It returns the client and a future that resolves once the server terminates.
+    /// The future yields if there was any error running the server. The server is started on the
+    /// provided handle. It can be manipulated by the [`ServerCtl`](struct.ServerCtl.html), which
+    /// is accessible through the returned [`Client`](struct.Client.html) and is passed to each
+    /// [`Server`](trait.Server.html) callback.
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
     pub fn start(self, handle: &Handle) -> (Client, ServerCtl, RelayReceiver<Option<IoError>>) {
@@ -526,6 +567,9 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
 impl<Connection> Endpoint<Connection, EmptyServer>
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static
 {
+    /// Create an endpoint with [`EmptyServer`](struct.EmptyServer.html)
+    ///
+    /// If you want to have client only, you can use this instead of `new`.
     pub fn client_only(connection: Connection) -> Self {
         Self::new(connection, EmptyServer)
     }
