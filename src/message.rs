@@ -101,7 +101,7 @@ impl RPCError {
         Err(RPCError {
             code: -32602,
             message: "Invalid params".to_owned(),
-            data: None
+            data: None,
         })
     }
     /// Create a server error.
@@ -109,7 +109,7 @@ impl RPCError {
         Err(RPCError {
             code: -32000,
             message: "Server error".to_owned(),
-            data: e.map(|v| to_value(v).expect("Must be representable in JSON"))
+            data: e.map(|v| to_value(v).expect("Must be representable in JSON")),
         })
     }
 }

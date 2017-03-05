@@ -43,9 +43,9 @@ impl Drop for DropTerminator {
 
 type RcDrop = Rc<DropTerminator>;
 
-/// An internal part of ServerCtl
+/// An internal part of `ServerCtl`
 ///
-/// The ServerCtl is just a thin Rc wrapper around this.
+/// The `ServerCtl` is just a thin Rc wrapper around this.
 struct ServerCtlInternal {
     // Stop processing requests
     stop: bool,
@@ -357,8 +357,8 @@ impl Client {
     ///
     /// Construct an RPC message and send it to the other end. It returns a future that resolves
     /// once the message is sent. It yields the Client back (it is blocked for the time of sending)
-    /// and another future that resolves once the answer is received (or once the connection is
-    /// lost, in which case the result is None).
+    /// and another future that resolves once the answer is received (or once a timeout happens, in
+    /// which case the result is None).
     pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
@@ -444,6 +444,7 @@ impl Client {
 /// The builder structure for the end point
 ///
 /// This is used to create the endpoint ‒ both the server and client part at once.
+// TODO: Example here
 pub struct Endpoint<Connection, RPCServer> {
     connection: Connection,
     server: RPCServer,
@@ -496,15 +497,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             handle: handle.clone(),
             sender: Some(sender.clone()),
         })));
-        let client = Client {
-            sender: sender,
-            data: ClientData {
-                idmap: idmap.clone(),
-                ctl: ctl.clone(),
-                handle: handle.clone(),
-                terminator: rc_terminator,
-            },
-        };
+        let client = Client::new(&idmap, &ctl, handle, &rc_terminator, &sender);
         let (sink, stream) = self.connection.split();
         // Create a future for each received item that'll return something. Run some of them in
         // parallel.
