@@ -27,12 +27,12 @@ use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
 use serde_json::{Value, from_value};
 
-struct AnswerServer;
-
 /// A test server
 ///
 /// It expects no parameters and the method to be `"test"` and returns 42 on RPC. It expects
 /// `"notif"` as a notification. Both `rpc` and `notification` terminate the server.
+struct AnswerServer;
+
 impl Server for AnswerServer {
     type Success = u32;
     type RPCCallResult = Result<u32, RPCError>;
@@ -380,5 +380,51 @@ fn kill_client() {
     reactor.run(all).unwrap();
 }
 
-// TODO: A test where one server notifies the other through the ctl.client()
+/// A server which also accesses its local client
+struct MutualServer;
+
+impl Server for MutualServer {
+    type Success = Value;
+    type RPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
+    type NotificationResult = Result<(), ()>;
+    fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
+        if method == "ask" {
+            let result = ctl.client()
+                .notify("terminate".to_owned(), None)
+                .map(|_| Value::String("Asked".to_owned())) // FIXME: Why does it fail with Value::Null? Problem parsing?
+                .or_else(|e| RPCError::server_error(Some(format!("{}", e))));
+            Some(Box::new(result))
+        } else {
+            None
+        }
+    }
+    fn notification(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
+        if method == "terminate" {
+            ctl.terminate();
+            Some(Ok(()))
+        } else {
+            None
+        }
+    }
+}
+
+/// A test where each side is both a client and server
+///
+/// And they ask each other to terminate. At tests, among others, the server's access to the client
+/// half of the endpoint.
+#[test]
+fn mutual() {
+    let (mut reactor, s1, s2) = prepare();
+    let all = {
+        // Run in a sub-block, so we drop all the clients, etc.
+        let handle = reactor.handle();
+        let (c1, s1_fin) = process_start(Endpoint::new(s1, MutualServer).start(&handle));
+        let (c2, s2_fin) = process_start(Endpoint::new(s2, MutualServer).start(&handle));
+        let c1_fin = c1.call("ask".to_owned(), None, None).and_then(|(_client, answered)| answered);
+        let c2_fin = c2.call("ask".to_owned(), None, None).and_then(|(_client, answered)| answered);
+        c1_fin.join4(c2_fin, s1_fin, s2_fin)
+    };
+    reactor.run(all).unwrap();
+}
+
 // TODO: Test the batches (we can't call batches now, can we?)
