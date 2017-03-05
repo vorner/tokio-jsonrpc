@@ -109,7 +109,7 @@ fn main() {
     let service = listener.incoming()
         .for_each(move |(connection, addr)| {
             // Once a connection is made, create an endpoint on it, using the above server
-            let (_client, _ctl, finished) = Endpoint::new(connection.framed(LineCodec::new()), TimeServer(handle.clone())).start(&handle);
+            let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()), TimeServer(handle.clone())).start(&handle);
             // If it finishes with an error, report it
             let err_report = finished.map(move |err| if let Some(e) = err {
                     println!("Problem on client {}: {}", addr, e);

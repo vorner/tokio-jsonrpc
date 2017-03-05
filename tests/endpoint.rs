@@ -84,13 +84,13 @@ fn prepare() -> (Core, Framed<TcpStream, LineCodec>, Framed<TcpStream, LineCodec
 /// Preprocess the tripple returned by .start
 ///
 /// So the error is checked that it didn't happen.
-fn process_start(params: (Client, ServerCtl, RelayReceiver<Option<IoError>>)) -> (Client, ServerCtl, Box<Future<Item = (), Error = IoError>>) {
-    let (client, ctl, finished) = params;
+fn process_start(params: (Client, RelayReceiver<Option<IoError>>)) -> (Client, Box<Future<Item = (), Error = IoError>>) {
+    let (client, finished) = params;
     let receiver = finished.map(|maybe_error| {
             assert!(maybe_error.is_none());
         })
         .map_err(|_| panic!("Canceled"));
-    (client, ctl, Box::new(receiver))
+    (client, Box::new(receiver))
 }
 
 /// Single RPC call
@@ -103,8 +103,8 @@ fn rpc_answer() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("test".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()))
@@ -120,8 +120,8 @@ fn notification() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.notify("notif".to_owned(), None)
             .and_then(|_client| Ok(()))
             .join3(server_finished, client_endpoint_finished)
@@ -173,8 +173,8 @@ fn wrong_method() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("wrong".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(|response| {
@@ -197,8 +197,8 @@ fn timeout() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("timeout".to_owned(), Some(json!([3, 0])), Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| assert!(response.is_none()))
@@ -214,8 +214,8 @@ fn delayed() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(1))).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("timeout".to_owned(), Some(json!([0, 500000000])), Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| assert!(response.unwrap().result.unwrap().as_bool().unwrap()))
@@ -233,7 +233,7 @@ fn client_only() {
     let client = {
         let handle = reactor.handle();
         Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle);
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
@@ -252,8 +252,8 @@ fn parallel() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         let first_finished = Rc::new(Cell::new(false));
         let first_finished_cloned = first_finished.clone();
         let client1_finished = client.clone()
@@ -287,8 +287,8 @@ fn seq() {
     let (mut reactor, s1, s2) = prepare();
     let all = {
         let handle = reactor.handle();
-        let (_client, _ctl, _server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle));
-        let (client, _ctl, _client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, _server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle));
+        let (client, _client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
             .and_then(|(client, answered)| {
                 let first_finished = Rc::new(Cell::new(false));
@@ -326,8 +326,8 @@ fn kill() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
-        let (client, _ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
         let client1_finished = client.clone()
             .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
             .and_then(|(_client, answered)| answered)
@@ -353,8 +353,9 @@ fn kill_client() {
     let all = {
         // Run in a sub-block, so we drop all the clients, etc.
         let handle = reactor.handle();
-        let (_client, _ctl, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
-        let (client, ctl, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let (_client, server_finished) = process_start(Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).parallel(2).start(&handle));
+        let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2).start(&handle));
+        let ctl = client.server_ctl().clone();
         let client1_finished = client.clone()
             .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
             .and_then(|(_client, answered)| answered)
@@ -379,24 +380,5 @@ fn kill_client() {
     reactor.run(all).unwrap();
 }
 
-/// Test we can get a working client from the server ctl
-#[test]
-fn client_from_ctl() {
-    let (mut reactor, s1, s2) = prepare();
-    let all = {
-        let handle = reactor.handle();
-        let (_client, _ctl, server1_finished) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
-        // We need to use a real server, otherwise the ctl would be already terminated
-        let (_client, ctl, server2_finished) = process_start(Endpoint::new(s2, AnswerServer).start(&handle));
-        let client = ctl.client();
-        // Terminate the client-side server
-        ctl.terminate();
-        client.call("test".to_owned(), None, None)
-            .and_then(|(_client, answered)| answered)
-            .map(|response| assert_eq!(json!(42), response.unwrap().result.unwrap()))
-            .join3(server1_finished, server2_finished)
-    };
-    reactor.run(all).unwrap();
-}
-
+// TODO: A test where one server notifies the other through the ctl.client()
 // TODO: Test the batches (we can't call batches now, can we?)

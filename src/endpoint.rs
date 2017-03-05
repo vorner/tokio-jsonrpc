@@ -482,7 +482,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     /// [`Server`](trait.Server.html) callback.
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
-    pub fn start(self, handle: &Handle) -> (Client, ServerCtl, RelayReceiver<Option<IoError>>) {
+    pub fn start(self, handle: &Handle) -> (Client, RelayReceiver<Option<IoError>>) {
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
         let (sender, receiver) = channel(32);
@@ -519,7 +519,6 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         // Move out of self, otherwise the closure captures self, not only server :-|
         let server = self.server;
         server.initialized(&ctl);
-        let ctl_cloned = ctl.clone();
         let idmap_cloned = idmap.clone();
         // A stream that contains no elements, but cleans the idmap once called (to kill the RPC
         // futures)
@@ -560,7 +559,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             });
         // Once the last thing is sent, we're done
         handle.spawn(transmitted);
-        (client, ctl_cloned, error_receiver)
+        (client, error_receiver)
     }
 }
 
