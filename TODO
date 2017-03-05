@@ -1,5 +1,4 @@
 • Provide logging
-• Update documentation, Endpoint is no longer a struct.
 • Consider making the client and the futures it returs Send (or only when asked for it?)
 • Inactivity timeout for the server
 • Provide constructors for the endpoint taking the connection directly, not Framed
