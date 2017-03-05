@@ -7,5 +7,4 @@
 • Consider the .rpc and .notification to take references
 • Create a changelog
 • Batches on the client side
-• Fold in the example
 • Docs in the lib.rs and in the README

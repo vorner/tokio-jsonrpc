@@ -77,11 +77,9 @@ impl Server for TimeServer {
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
                     .or_else(|e| RPCError::server_error(Some(format!("Can't start interval: {}", e))))
                     .map(move |interval| {
-                        // And send the notification on each tick
-                        let notified = interval.for_each(move |_| {
-                                client.clone()
-                                    .notify("time".to_owned(), Some(json!([now()])))
-                                    .map(|_| ())
+                        // And send the notification on each tick (and pass the client through)
+                        let notified = interval.fold(client, |client, _| {
+                                client.notify("time".to_owned(), Some(json!([now()])))
                             })
                             // So it can be spawned, spawn needs ().
                             .map(|_| ())
