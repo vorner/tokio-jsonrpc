@@ -55,23 +55,27 @@
 //! # use tokio_core::net::TcpListener;
 //! # use tokio_core::io::Io;
 //! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RPCError, Endpoint};
-//! # use futures::{Stream, Sink, Future};
+//! # use futures::{Stream};
 //! # use serde_json::Value;
 //! #
 //! # fn main() {
-//! # let mut core = Core::new().unwrap();
+//! # let core = Core::new().unwrap();
 //! # let handle = core.handle();
 //! #
-//! # let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
+//! # let listener = TcpListener::bind(&"127.0.0.1:2346".parse().unwrap(), &handle).unwrap();
 //! struct UselessServer;
 //!
 //! impl Server for UselessServer {
 //!     type Success = String;
 //!     type RPCCallResult = Result<String, RPCError>;
 //!     type NotificationResult = Result<(), ()>;
-//!     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
+//!     fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
 //!         match method {
 //!             "hello" => Some(Ok("world".to_owned())),
+//!             "bye" => {
+//!                 ctl.terminate();
+//!                 Some(Ok("bye".to_owned()))
+//!             },
 //!             _ => None
 //!         }
 //!     }
@@ -82,6 +86,7 @@
 //!     client.notify("hello".to_owned(), None);
 //!     Ok(())
 //! });
+//! # drop(connections);
 //! # }
 //! ```
 
