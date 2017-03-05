@@ -26,7 +26,7 @@ use relay::Receiver as RelayReceiver;
 use tokio_core::reactor::{Core, Timeout, Handle};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
-use serde_json::{Value, to_value, from_value};
+use serde_json::{Value, from_value};
 
 struct AnswerServer;
 
@@ -153,7 +153,7 @@ impl Server for AnotherServer {
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
                 .map(|_| true)
-                .map_err(|e| (-32000, "Server error".to_owned(), Some(to_value(format!("{}", e)).unwrap())))
+                .or_else(|e| ServerError::server_error(Some(format!("{}", e))))
                 .boxed();
             Some(timeout)
         } else if method == "kill" {

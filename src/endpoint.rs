@@ -102,7 +102,18 @@ impl ServerCtl {
     }
 }
 
-pub type ServerError = (i64, String, Option<Value>);
+pub struct ServerError(pub i64, pub String, pub Option<Value>);
+
+impl ServerError {
+    pub fn invalid_params<R>() -> Result<R, Self> {
+        Err(ServerError(-32602, "Invalid params".to_owned(), None))
+    }
+    pub fn server_error<R, E: Serialize>(e: Option<E>) -> Result<R, Self> {
+        Err(ServerError(-32000,
+                        "Server error".to_owned(),
+                        e.map(|v| to_value(v).expect("Must be representable in JSON"))))
+    }
+}
 
 /// The server endpoint
 ///
@@ -181,7 +192,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, 
         None => Box::new(Ok(Some(request.error(-32601, "Method not found".to_owned(), Some(Value::String(request.method.clone()))))).into_future()),
         Some(future) => {
             Box::new(future.into_future().then(move |result| match result {
-                Err((code, msg, data)) => Ok(Some(request.error(code, msg, data))),
+                Err(ServerError(code, msg, data)) => Ok(Some(request.error(code, msg, data))),
                 Ok(result) => Ok(Some(request.reply(to_value(result).expect("Trying to return a value that can't be converted to JSON")))),
             }))
         },
