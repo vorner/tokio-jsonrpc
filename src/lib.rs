@@ -14,6 +14,8 @@
 //!
 //! # Examples
 //!
+//! A skeleton of reading messages from the other side, mapping them to answers and sending them back.
+//!
 //! ```rust
 //! # extern crate tokio_core;
 //! # extern crate tokio_jsonrpc;
@@ -26,10 +28,10 @@
 //! # use futures::{Stream, Sink, Future};
 //! #
 //! # fn main() {
-//! # let mut core = Core::new().unwrap();
-//! # let handle = core.handle();
-//! #
-//! # let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
+//! let mut core = Core::new().unwrap();
+//! let handle = core.handle();
+//!
+//! let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
 //! let connections = listener.incoming();
 //! let service = connections.for_each(|(stream, _)| {
 //!     let messages = stream.framed(LineCodec::new());
@@ -45,7 +47,9 @@
 //! # }
 //! ```
 //!
-//! ```rust
+//! Provide a server that greets through an RPC.
+//!
+//! ```rust,no_run
 //! # extern crate tokio_core;
 //! # extern crate tokio_jsonrpc;
 //! # extern crate futures;
@@ -59,19 +63,26 @@
 //! # use serde_json::Value;
 //! #
 //! # fn main() {
-//! # let core = Core::new().unwrap();
-//! # let handle = core.handle();
-//! #
-//! # let listener = TcpListener::bind(&"127.0.0.1:2346".parse().unwrap(), &handle).unwrap();
+//! let mut core = Core::new().unwrap();
+//! let handle = core.handle();
+//!
+//! let listener = TcpListener::bind(&"127.0.0.1:2346".parse().unwrap(), &handle).unwrap();
+//!
 //! struct UselessServer;
 //!
 //! impl Server for UselessServer {
 //!     type Success = String;
 //!     type RPCCallResult = Result<String, RPCError>;
 //!     type NotificationResult = Result<(), ()>;
-//!     fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
+//!     fn rpc(&self,
+//!            ctl: &ServerCtl,
+//!            method: &str,
+//!            _params: &Option<Value>)
+//!         -> Option<Self::RPCCallResult> {
 //!         match method {
+//!             // Accept a hello message and finish the greeting
 //!             "hello" => Some(Ok("world".to_owned())),
+//!             // When the other side says bye, terminate the connection
 //!             "bye" => {
 //!                 ctl.terminate();
 //!                 Some(Ok("bye".to_owned()))
@@ -82,11 +93,14 @@
 //! }
 //!
 //! let connections = listener.incoming().for_each(|(stream, _)| {
-//!     let (client, _server_finished) = Endpoint::new(stream.framed(LineCodec::new()), UselessServer).start(&handle);
-//!     client.notify("hello".to_owned(), None);
+//!     // Greet every new connection
+//!     Endpoint::new(stream.framed(LineCodec::new()), UselessServer).start(&handle)
+//!         .0
+//!         .notify("hello".to_owned(), None);
 //!     Ok(())
 //! });
-//! # drop(connections);
+//!
+//! core.run(connections).unwrap();
 //! # }
 //! ```
 

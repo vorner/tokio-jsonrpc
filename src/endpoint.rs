@@ -201,6 +201,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, 
 fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl, notification: &Notification) -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => Box::new(Ok(None).into_future()),
+        // We ignore both success and error, so we convert it into something for now
         Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
     }
 }
@@ -444,7 +445,53 @@ impl Client {
 /// The builder structure for the end point
 ///
 /// This is used to create the endpoint ‒ both the server and client part at once.
-// TODO: Example here
+///
+/// # Examples
+///
+/// This will create a connection, build a client-only endpoint on it and send an RPC to the other
+/// side, printing the result once it comes.
+///
+/// ```rust,no_run
+/// # extern crate tokio_core;
+/// # extern crate tokio_jsonrpc;
+/// # extern crate futures;
+/// # #[macro_use]
+/// # extern crate serde_json;
+/// #
+/// # use std::time::Duration;
+/// # use tokio_core::reactor::Core;
+/// # use tokio_core::net::TcpStream;
+/// # use tokio_core::io::Io;
+/// # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RPCError, Endpoint};
+/// # use tokio_jsonrpc::message::Response;
+/// # use futures::{Future, Stream};
+/// # use serde_json::Value;
+/// #
+/// # fn main() {
+/// let mut core = Core::new().unwrap();
+/// let handle = core.handle();
+///
+/// let request = TcpStream::connect(&"127.0.0.1:2346".parse().unwrap(), &handle)
+///     .map(move |stream| {
+///         // Create a client on top of the connection
+///         let (client, _finished) = Endpoint::client_only(stream.framed(LineCodec::new()))
+///             .start(&handle);
+///         // Call a method with some parameters and a 10 seconds timeout
+///         client.call("request".to_owned(),
+///                     Some(json!(["param1", "param2"])),
+///                     Some(Duration::new(10, 0)))
+///             .and_then(|(_client, future_result)| future_result)
+///             .map(|response| {
+///                 match response {
+///                     None => println!("A timeout happened"),
+///                     Some(Response { result, .. }) => println!("The answer is {:?}", result),
+///                 }
+///             })
+///     });
+///
+/// core.run(request).unwrap();
+/// # }
+/// ```
 pub struct Endpoint<Connection, RPCServer> {
     connection: Connection,
     server: RPCServer,
