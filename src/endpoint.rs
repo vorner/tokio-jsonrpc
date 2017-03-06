@@ -43,7 +43,7 @@ impl Drop for DropTerminator {
 
 type RcDrop = Rc<DropTerminator>;
 
-/// An internal part of `ServerCtl`
+/// An internal part of `ServerCtl`.
 ///
 /// The `ServerCtl` is just a thin Rc wrapper around this.
 struct ServerCtlInternal {
@@ -59,7 +59,7 @@ struct ServerCtlInternal {
     sender: Option<Sender<Message>>,
 }
 
-/// A handle to control the server
+/// A handle to control the server.
 ///
 /// An instance is provided to each [`Server`](trait.Server.html) callback and it can be used to
 /// manipulate the server (currently only to terminate the server) or to create a client for the
@@ -502,7 +502,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static,
           RPCServer: Server + 'static
 {
-    /// Create the endpoint
+    /// Create the endpoint.
     ///
     /// Pass it the connection to build the endpoint on and the server to use internally.
     pub fn new(connection: Connection, server: RPCServer) -> Self {
@@ -512,15 +512,15 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
             parallel: 1,
         }
     }
-    /// Set how many RPCs may be process in parallel
+    /// Set how many RPCs may be process in parallel.
     ///
     /// As the RPC may be a future, it is possible to have multiple of them in the pipeline at
     /// once. By default, no parallelism is allowed on one endpoint. Calling this sets how many
-    /// parallel endpoints there may be.
+    /// parallel futures there may be at one time on this particular endpoint.
     pub fn parallel(self, parallel: usize) -> Self {
         Endpoint { parallel: parallel, ..self }
     }
-    /// Start the endpoint
+    /// Start the endpoint.
     ///
     /// Once all configuration is set, this creates the actual endpoint pair ‒ both the server and
     /// the client. It returns the client and a future that resolves once the server terminates.
@@ -606,7 +606,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
 impl<Connection> Endpoint<Connection, EmptyServer>
     where Connection: Stream<Item = Parsed, Error = IoError> + Sink<SinkItem = Message, SinkError = IoError> + Send + 'static
 {
-    /// Create an endpoint with [`EmptyServer`](struct.EmptyServer.html)
+    /// Create an endpoint with [`EmptyServer`](struct.EmptyServer.html).
     ///
     /// If you want to have client only, you can use this instead of `new`.
     pub fn client_only(connection: Connection) -> Self {
