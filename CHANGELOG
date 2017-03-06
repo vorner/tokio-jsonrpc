@@ -1,0 +1,4 @@
+# 0.2.0:
+
+Added the endpoint infrastructure. It allows calling and handling the RPCs and
+notifications.

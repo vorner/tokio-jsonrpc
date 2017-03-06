@@ -4,5 +4,4 @@
 • Provide constructors for the endpoint taking the connection directly, not Framed
 • Finished might return some better error than canceled (everything uses IoError around here anyway)
 • Consider the .rpc and .notification to take references
-• Create a changelog
 • Batches on the client side
