@@ -19,11 +19,47 @@ use tokio_core::io::{Codec, EasyBuf};
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
-use message::{Message, Parsed, from_slice};
+use message::{Message, Parsed, from_slice, from_str};
 
 /// A helper to wrap the error
 fn err_map(e: SerdeError) -> Error {
     Error::new(ErrorKind::Other, e)
+}
+
+/// A helper trait to unify `Line` and `DirtyLine`
+trait PositionCache {
+    fn position(&mut self) -> &mut usize;
+}
+
+/// An encoding function reused by `Line` and `DirtyLine`
+fn encode_codec(msg: &Message, buf: &mut Vec<u8>) -> IoResult<()> {
+    let mut encoded = to_vec(&msg).map_err(err_map)?;
+    // As discovered the hard way, we must not overwrite buf, but append to it.
+    buf.reserve(encoded.len() + 1);
+    buf.append(&mut encoded);
+    buf.push(b'\n');
+    Ok(())
+}
+
+fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut EasyBuf, convert: Convert) -> IoResult<Option<Parsed>>
+    where
+        Cache: PositionCache,
+        Convert: FnOnce(&[u8]) -> Parsed
+{
+    // Where did we stop scanning before? Scan only the new part
+    let start_pos = cache.position();
+    if let Some(i) = buf.as_slice()[*start_pos..].iter().position(|&b| b == b'\n') {
+        let end_pos = *start_pos + i;
+        let line = buf.drain_to(end_pos);
+        buf.drain_to(1);
+        // We'll start from the beginning next time.
+        *start_pos = 0;
+        Ok(Some(convert(line.as_slice())))
+    } else {
+        // Mark where we ended scanning.
+        *start_pos = buf.len();
+        Ok(None)
+    }
 }
 
 /// A codec working with JSONRPC 2.0 messages.
@@ -37,8 +73,15 @@ fn err_map(e: SerdeError) -> Error {
 pub struct Line(usize);
 
 impl Line {
+    /// A constructor
     pub fn new() -> Self {
         Line(0)
+    }
+}
+
+impl PositionCache for Line {
+    fn position(&mut self) -> &mut usize {
+        &mut self.0
     }
 }
 
@@ -46,28 +89,46 @@ impl Codec for Line {
     type In = Parsed;
     type Out = Message;
     fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
-        // Where did we stop scanning before? Scan only the new part
-        let start_pos = self.0;
-        if let Some(i) = buf.as_slice()[start_pos..].iter().position(|&b| b == b'\n') {
-            let end_pos = start_pos + i;
-            let line = buf.drain_to(end_pos);
-            buf.drain_to(1);
-            // We'll start from the beginning next time.
-            self.0 = 0;
-            Ok(Some(from_slice(line.as_slice())))
-        } else {
-            // Mark where we ended scanning.
-            self.0 = buf.len();
-            Ok(None)
-        }
+        decode_codec(self, buf, from_slice)
     }
     fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
-        let mut encoded = to_vec(&msg).map_err(err_map)?;
-        // As discovered the hard way, we must not overwrite buf, but append to it.
-        buf.reserve(encoded.len() + 1);
-        buf.append(&mut encoded);
-        buf.push(b'\n');
-        Ok(())
+        encode_codec(&msg, buf)
+    }
+}
+
+/// A codec working with JSONRPC 2.0 messages on top of badly encoded utf-8.
+///
+/// This works like the [Line](struct.Line.html) codec. However, it can cope with the input not
+/// being valid utf-8. That is arguably broken, nevertheless found in the wild and sometimes the
+/// only thing left to be done is to cope with it. This copes with it by running the input through
+/// the `String::from_utf8_lossy` conversion, effectively replacing anything that is not valid with
+/// these special utf-8 WTF question marks (U+FFFD).
+///
+/// In contrast, Line errors on such invalid inputs. Encoding is the same for both codecs, however.
+#[derive(Debug, Default)]
+pub struct DirtyLine(usize);
+
+impl DirtyLine {
+    /// A constructor
+    pub fn new() -> Self {
+        DirtyLine(0)
+    }
+}
+
+impl PositionCache for DirtyLine {
+    fn position(&mut self) -> &mut usize {
+        &mut self.0
+    }
+}
+
+impl Codec for DirtyLine {
+    type In = Parsed;
+    type Out = Message;
+    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
+        decode_codec(self, buf, |bytes| from_str(String::from_utf8_lossy(bytes).as_ref()))
+    }
+    fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
+        encode_codec(&msg, buf)
     }
 }
 
@@ -89,18 +150,35 @@ mod tests {
     fn encode() {
         let mut output = Vec::new();
         let mut codec = Line::new();
-        codec.encode(Message::notification("notif".to_owned(), None), &mut output).unwrap();
-        assert_eq!(Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]), output);
+        let msg = Message::notification("notif".to_owned(), None);
+        let encoded = Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]);
+        codec.encode(msg.clone(), &mut output).unwrap();
+        assert_eq!(encoded, output);
+        let mut dirty_codec = DirtyLine::new();
+        output.clear();
+        dirty_codec.encode(msg, &mut output).unwrap();
+        assert_eq!(encoded, output);
+    }
+
+    fn get_buf(input: &[u8]) -> EasyBuf {
+        let mut result = EasyBuf::new();
+        result.get_mut().extend_from_slice(input);
+        result
     }
 
     #[test]
     fn decode() {
         fn one(input: &[u8], rest: &[u8]) -> IoResult<Option<Parsed>> {
             let mut codec = Line::new();
-            let mut buf = EasyBuf::new();
-            buf.get_mut().extend_from_slice(input);
+            let mut buf = get_buf(input);
             let result = codec.decode(&mut buf);
             assert_eq!(rest, buf.as_slice());
+            // On all the valid inputs, DirtyLine should act the same as Line
+            let mut dirty_codec = DirtyLine::new();
+            let mut buf = get_buf(input);
+            let dirty = dirty_codec.decode(&mut buf);
+            assert_eq!(rest, buf.as_slice());
+            assert_eq!(result.as_ref().unwrap(), dirty.as_ref().unwrap());
             result
         }
 
@@ -124,5 +202,24 @@ mod tests {
             Ok(Some(Err(Broken::SyntaxError(_)))) => (),
             other => panic!("Something unexpected: {:?}", other),
         };
+    }
+
+    /// Test with invalid utf-8 in a string
+    #[test]
+    fn decode_nonunicode() {
+        let broken_input = b"{\"jsonrpc\":\"2.0\",\"method\":\"Hello \xF0\x90\x80World\"}\n";
+        let mut codec = Line::new();
+        let mut buf = get_buf(broken_input);
+        // The ordinary line codec gives up
+        let result = codec.decode(&mut buf).unwrap();
+        match result {
+            Some(Err(Broken::SyntaxError(_))) => (),
+            other => panic!("Something unexpected: {:?}", other),
+        };
+        buf = get_buf(broken_input);
+        // But the dirty one just keeps going on
+        let mut dirty = DirtyLine::new();
+        let result = dirty.decode(&mut buf).unwrap();
+        assert_eq!(result, Some(Ok(Message::notification("Hello �World".to_owned(), None))));
     }
 }
