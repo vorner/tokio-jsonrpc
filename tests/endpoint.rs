@@ -17,14 +17,14 @@ use std::io::Error as IoError;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, RPCError};
-
 use futures::{Future, Stream, IntoFuture};
 use futures::future::BoxFuture;
 use tokio_core::reactor::{Core, Timeout, Handle};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
 use serde_json::{Value, from_value};
+
+use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, RPCError};
 
 /// A test server
 ///

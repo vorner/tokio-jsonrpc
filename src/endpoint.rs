@@ -13,8 +13,6 @@
 //! [`Endpoint`](struct.Endpoint.html)'s constructor. If you want a server-only endpoint,
 //! simply don't call any RPCs or notifications.
 
-use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
-
 use std::io::{self, Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -29,6 +27,8 @@ use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
 use tokio_core::reactor::{Handle, Timeout};
+
+use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
 
 /// Thing that terminates the connection once dropped.
 ///

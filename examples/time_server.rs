@@ -21,13 +21,13 @@ extern crate futures;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, RPCError};
-
 use futures::{Future, Stream};
 use tokio_core::io::Io;
 use tokio_core::reactor::{Handle, Interval, Core};
 use tokio_core::net::TcpListener;
 use serde_json::{Value, from_value};
+
+use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, RPCError};
 
 /// A helper struct to deserialize the parameters
 #[derive(Deserialize)]

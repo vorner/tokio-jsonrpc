@@ -8,19 +8,18 @@
 // TODO: Some comments explaining what is happening
 
 extern crate tokio_jsonrpc;
-
 #[macro_use]
 extern crate serde_json;
 extern crate futures;
 extern crate tokio_core;
 
-use tokio_jsonrpc::{Message, LineCodec, RPCError};
-use tokio_jsonrpc::message::Notification;
-
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_core::io::Io;
+
+use tokio_jsonrpc::{Message, LineCodec, RPCError};
+use tokio_jsonrpc::message::Notification;
 
 fn main() {
     let mut core = Core::new().unwrap();
