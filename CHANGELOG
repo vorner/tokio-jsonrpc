@@ -1,3 +1,8 @@
+# 0.3.0:
+
+Cleanups in documentaion in API. The functionality is the same, but the API is
+a bit different. Bumping version because of that incompatibility.
+
 # 0.2.0:
 
 Added the endpoint infrastructure. It allows calling and handling the RPCs and
