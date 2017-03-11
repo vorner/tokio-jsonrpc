@@ -301,7 +301,7 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idma
 ///
 /// You can use this if you want to have a client-only [Endpoint](struct.Endpoint.html). It simply
 /// terminates the server part right away. Or, more conveniently, use `Endpoint`'s
-/// [client_only](struct.Endpoint.html#method.client_only) method.
+/// [`client_only`](struct.Endpoint.html#method.client_only) method.
 pub struct EmptyServer;
 
 impl Server for EmptyServer {
