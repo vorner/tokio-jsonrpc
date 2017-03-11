@@ -64,18 +64,18 @@ impl Server for TimeServer {
             "subscribe" => {
                 // Some parsing and bailing out on errors
                 if params.is_none() {
-                    return Some(RPCError::invalid_params());
+                    return Some(Err(RPCError::invalid_params()));
                 }
                 let s_params = match from_value::<SubscribeParams>(params.clone().unwrap()) {
                     Ok(p) => p,
-                    Err(_) => return Some(RPCError::invalid_params()),
+                    Err(_) => return Some(Err(RPCError::invalid_params())),
                 };
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
                 // Get a stream that „ticks“
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
-                    .or_else(|e| RPCError::server_error(Some(format!("Can't start interval: {}", e))))
+                    .or_else(|e| Err(RPCError::server_error(Some(format!("Can't start interval: {}", e)))))
                     .map(move |interval| {
                         // And send the notification on each tick (and pass the client through)
                         let notified = interval.fold(client, |client, _| {
@@ -109,10 +109,7 @@ fn main() {
             // Once a connection is made, create an endpoint on it, using the above server
             let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()), TimeServer(handle.clone())).start(&handle);
             // If it finishes with an error, report it
-            let err_report = finished.map(move |err| if let Some(e) = err {
-                    println!("Problem on client {}: {}", addr, e);
-                })
-                .map_err(|_| unreachable!("Error receiving server error"));
+            let err_report = finished.map_err(move |e| println!("Problem on client {}: {}", addr, e));
             handle.spawn(err_report);
             // Just so the for_each is happy, nobody actually uses this
             Ok(())

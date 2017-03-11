@@ -21,7 +21,6 @@ use tokio_jsonrpc::{Endpoint, LineCodec, Client, Server, ServerCtl, RPCError};
 
 use futures::{Future, Stream, IntoFuture};
 use futures::future::BoxFuture;
-use relay::Receiver as RelayReceiver;
 use tokio_core::reactor::{Core, Timeout, Handle};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Io, Framed};
@@ -84,12 +83,11 @@ fn prepare() -> (Core, Framed<TcpStream, LineCodec>, Framed<TcpStream, LineCodec
 /// Preprocess the tripple returned by .start
 ///
 /// So the error is checked that it didn't happen.
-fn process_start(params: (Client, RelayReceiver<Option<IoError>>)) -> (Client, Box<Future<Item = (), Error = IoError>>) {
+fn process_start(params: (Client, Box<Future<Item = (), Error = IoError>>)) -> (Client, Box<Future<Item = (), Error = IoError>>) {
     let (client, finished) = params;
-    let receiver = finished.map(|maybe_error| {
-            assert!(maybe_error.is_none());
-        })
-        .map_err(|_| panic!("Canceled"));
+    let receiver = finished.map_err(|err| {
+            panic!("Error: {}", err);
+        });
     (client, Box::new(receiver))
 }
 
@@ -152,7 +150,7 @@ impl Server for AnotherServer {
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
                 .map(|_| true)
-                .or_else(|e| RPCError::server_error(Some(format!("{}", e))))
+                .or_else(|e| Err(RPCError::server_error(Some(format!("{}", e)))))
                 .boxed();
             Some(timeout)
         } else if method == "kill" {
@@ -392,7 +390,7 @@ impl Server for MutualServer {
             let result = ctl.client()
                 .notify("terminate".to_owned(), None)
                 .map(|_| Value::Null)
-                .or_else(|e| RPCError::server_error(Some(format!("{}", e))));
+                .or_else(|e| Err(RPCError::server_error(Some(format!("{}", e)))));
             Some(Box::new(result))
         } else {
             None

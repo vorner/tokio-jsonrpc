@@ -14,7 +14,7 @@ extern crate serde_json;
 extern crate futures;
 extern crate tokio_core;
 
-use tokio_jsonrpc::{Message, LineCodec};
+use tokio_jsonrpc::{Message, LineCodec, RPCError};
 use tokio_jsonrpc::message::Notification;
 
 use futures::{Future, Sink, Stream};
@@ -39,7 +39,7 @@ fn main() {
                     if req.method == "echo" {
                         Some(req.reply(json!([req.method, req.params])))
                     } else {
-                        Some(req.error(-32601, format!("Unknown method {}", req.method), None))
+                        Some(req.error(RPCError::method_not_found(req.method.clone())))
                     }
                 },
                 Ok(Message::Notification(Notification { ref method, .. })) => {

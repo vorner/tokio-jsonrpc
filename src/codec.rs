@@ -44,8 +44,7 @@ fn encode_codec(msg: &Message, buf: &mut Vec<u8>) -> IoResult<()> {
 fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut EasyBuf, convert: Convert) -> IoResult<Option<Parsed>>
     where
         Cache: PositionCache,
-        Convert: FnOnce(&[u8]) -> Parsed
-{
+        Convert: FnOnce(&[u8]) -> Parsed {
     // Where did we stop scanning before? Scan only the new part
     let start_pos = cache.position();
     if let Some(i) = buf.as_slice()[*start_pos..].iter().position(|&b| b == b'\n') {

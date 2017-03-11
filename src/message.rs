@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-//! A JSON-RPC 2.0 messages
+//! JSON-RPC 2.0 messages.
 //!
 //! The main entrypoint here is the [Message](enum.Message.html). The others are just building
 //! blocks and you should generally work with `Message` instead.
@@ -15,7 +15,7 @@ use serde::de::{Deserialize, Deserializer, Unexpected, Error};
 use serde_json::{Value, to_value};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Version;
 
 impl Serialize for Version {
@@ -36,7 +36,7 @@ impl Deserialize for Version {
     }
 }
 
-/// An RPC request
+/// An RPC request.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -59,24 +59,7 @@ impl Request {
         })
     }
     /// Answer the request with an error.
-    ///
-    /// The ID is taken from the request and the error structure is constructed.
-    pub fn error(&self, code: i64, message: String, data: Option<Value>) -> Message {
-        Message::Response(Response {
-            jsonrpc: Version,
-            result: Err(RPCError {
-                code: code,
-                message: message,
-                data: data,
-            }),
-            id: self.id.clone(),
-        })
-    }
-    /// Answer the request with an error.
-    ///
-    /// It is like [`error`](#fn.error), but takes already created
-    /// [`RPCError`](struct.RPCError.html).
-    pub fn error_prepared(&self, error: RPCError) -> Message {
+    pub fn error(&self, error: RPCError) -> Message {
         Message::Response(Response {
             jsonrpc: Version,
             result: Err(error),
@@ -85,7 +68,7 @@ impl Request {
     }
 }
 
-/// An error code
+/// An error code.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RPCError {
@@ -96,25 +79,42 @@ pub struct RPCError {
 }
 
 impl RPCError {
+    /// A generic constructor.
+    ///
+    /// Mostly for completeness, doesn't do anything but filling in the corresponding fields.
+    pub fn new(code: i64, message: String, data: Option<Value>) -> Self {
+        RPCError {
+            code: code,
+            message: message,
+            data: data,
+        }
+    }
     /// Create an Invalid Param error.
-    pub fn invalid_params<R>() -> Result<R, Self> {
-        Err(RPCError {
-            code: -32602,
-            message: "Invalid params".to_owned(),
-            data: None,
-        })
+    pub fn invalid_params() -> Self {
+        RPCError::new(-32602, "Invalid params".to_owned(), None)
     }
     /// Create a server error.
-    pub fn server_error<R, E: Serialize>(e: Option<E>) -> Result<R, Self> {
-        Err(RPCError {
-            code: -32000,
-            message: "Server error".to_owned(),
-            data: e.map(|v| to_value(v).expect("Must be representable in JSON")),
-        })
+    pub fn server_error<E: Serialize>(e: Option<E>) -> Self {
+        RPCError::new(-32000, "Server error".to_owned(),
+                      e.map(|v| to_value(v).expect("Must be representable in JSON")))
+    }
+    /// Create an invalid request error.
+    pub fn invalid_request() -> Self {
+        RPCError::new(-32600, "Invalid request".to_owned(), None)
+    }
+    /// Create a parse error.
+    pub fn parse_error(e: String) -> Self {
+        RPCError::new(-32700, "Parse error".to_owned(), Some(Value::String(e)))
+    }
+    /// Create a method not found error.
+    pub fn method_not_found(method: String) -> Self {
+        RPCError::new(-32601, "Method not found".to_owned(), Some(Value::String(method)))
     }
 }
 
-/// A response to an RPC
+/// A response to an RPC.
+///
+/// It is created by the methods on [Request](struct.Request.html).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     jsonrpc: Version,
@@ -135,7 +135,7 @@ impl Serialize for Response {
     }
 }
 
-/// Deserializer for `Option<Value>` that produces `Some(Value::Null)`
+/// Deserializer for `Option<Value>` that produces `Some(Value::Null)`.
 ///
 /// The usual one produces None in that case. But we need to know the difference between
 /// `{x: null}` and `{}`.
@@ -143,6 +143,7 @@ fn some_value<D: Deserializer>(deserializer: D) -> Result<Option<Value>, D::Erro
     Deserialize::deserialize(deserializer).map(Some)
 }
 
+/// A helper trick for deserialization.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireResponse {
@@ -180,7 +181,7 @@ impl Deserialize for Response {
     }
 }
 
-/// A notification (doesn't expect an answer)
+/// A notification (doesn't expect an answer).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Notification {
@@ -190,7 +191,7 @@ pub struct Notification {
     pub params: Option<Value>,
 }
 
-/// One message of the JSON RPC protocol
+/// One message of the JSON RPC protocol.
 ///
 /// One message, directly mapped from the structures of the protocol. See the
 /// [specification](http://www.jsonrpc.org/specification) for more details.
@@ -206,10 +207,25 @@ pub struct Notification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
+    /// An RPC request.
     Request(Request),
+    /// A response to a Request.
     Response(Response),
+    /// A notification.
     Notification(Notification),
+    /// A batch of more requests or responses.
+    ///
+    /// The protocol allows bundling multiple requests, notifications or responses to a single
+    /// message.
+    ///
+    /// This variant has no direct constructor and is expected to be constructed manually.
     Batch(Vec<Message>),
+    /// An unmatched sub entry in a `Batch`.
+    ///
+    /// When there's a `Batch` and an element doesn't comform to the JSONRPC 2.0 format, that one
+    /// is represented by this. This is never produced as a top-level value when parsing, the
+    /// `Err(Broken::Unmatched)` is used instead. It is not possible to serialize.
+    #[serde(skip_serializing)]
     UnmatchedSub(Value),
 }
 
@@ -225,15 +241,11 @@ impl Message {
             id: Value::String(Uuid::new_v4().hyphenated().to_string()),
         })
     }
-    /// Create a top-level error (without an ID)
-    pub fn error(code: i64, message: String, data: Option<Value>) -> Self {
+    /// Create a top-level error (without an ID).
+    pub fn error(error: RPCError) -> Self {
         Message::Response(Response {
             jsonrpc: Version,
-            result: Err(RPCError {
-                code: code,
-                message: message,
-                data: data,
-            }),
+            result: Err(error),
             id: Value::Null,
         })
     }
@@ -247,31 +259,33 @@ impl Message {
     }
 }
 
-/// A broken message
+/// A broken message.
 ///
-/// Protocol-level errors. `Unmatched` means it was valid JSON, but not a JSONRPC 2.0 message.
+/// Protocol-level errors.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum Broken {
+    /// It was valid JSON, but doesn't match the form of a JSONRPC 2.0 message.
     Unmatched(Value),
+    /// Invalid JSON.
     #[serde(skip_deserializing)]
     SyntaxError(String),
 }
 
 impl Broken {
-    /// Generate an appropriate error message
+    /// Generate an appropriate error message.
     ///
     /// The error message for these things are specified in the RFC, so this just creates an error
     /// with the right values.
     pub fn reply(&self) -> Message {
         match *self {
-            Broken::Unmatched(_) => Message::error(-32600, "Invalid request".to_owned(), None),
-            Broken::SyntaxError(ref e) => Message::error(-32600, "Parse error".to_owned(), Some(Value::String(e.clone()))),
+            Broken::Unmatched(_) => Message::error(RPCError::invalid_request()),
+            Broken::SyntaxError(ref e) => Message::error(RPCError::parse_error(e.clone())),
         }
     }
 }
 
-// A trick to easily deserialize and detect valid JSON, but invalid Message.
+/// A trick to easily deserialize and detect valid JSON, but invalid Message.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WireMessage {
@@ -281,7 +295,7 @@ enum WireMessage {
 
 pub type Parsed = Result<Message, Broken>;
 
-/// Read a [Message](enum.Message.html) from a slice
+/// Read a [Message](enum.Message.html) from a slice.
 ///
 /// Invalid JSON or JSONRPC messages are reported as [Broken](enum.Broken.html).
 pub fn from_slice(s: &[u8]) -> Parsed {
@@ -377,18 +391,13 @@ mod tests {
         one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
             &Message::Response(Response {
                 jsonrpc: Version,
-                result: Err(RPCError {
-                    code: 42,
-                    message: "Wrong!".to_owned(),
-                    data: None,
-                }),
+                result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
                 id: Value::Null,
             }));
         // A batch
         one(r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
-                {"jsonrpc": "2.0", "method": "call", "id": 42},
-                true
+                {"jsonrpc": "2.0", "method": "call", "id": 42}
             ]"#,
             &Message::Batch(vec![
                 Message::Notification(Notification {
@@ -402,8 +411,28 @@ mod tests {
                     params: None,
                     id: json!(42),
                 }),
-                Message::UnmatchedSub(Value::Bool(true)),
             ]));
+        // Some handling of broken messages inside a batch
+        let parsed = from_str(r#"[
+                {"jsonrpc": "2.0", "method": "notif"},
+                {"jsonrpc": "2.0", "method": "call", "id": 42},
+                true
+            ]"#).unwrap();
+        assert_eq!(Message::Batch(vec![
+                Message::Notification(Notification {
+                    jsonrpc: Version,
+                    method: "notif".to_owned(),
+                    params: None,
+                }),
+                Message::Request(Request {
+                    jsonrpc: Version,
+                    method: "call".to_owned(),
+                    params: None,
+                    id: json!(42),
+                }),
+                Message::UnmatchedSub(Value::Bool(true)),
+            ]), parsed);
+        to_vec(&Message::UnmatchedSub(Value::Null)).unwrap_err();
     }
 
     /// A helper for the `broken` test.
@@ -475,28 +504,20 @@ mod tests {
         }
         let id2 = req2.id.clone();
         // The same with an error
-        if let Message::Response(ref resp) = req2.error(42, "Wrong!".to_owned(), None) {
+        if let Message::Response(ref resp) = req2.error(RPCError::new(42, "Wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
-                result: Err(RPCError {
-                    code: 42,
-                    message: "Wrong!".to_owned(),
-                    data: None,
-                }),
+                result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
                 id: id2,
             });
         } else {
             panic!("Not a response");
         }
         // When we have unmatched, we generate a top-level error with Null id.
-        if let Message::Response(ref resp) = Message::error(43, "Also wrong!".to_owned(), None) {
+        if let Message::Response(ref resp) = Message::error(RPCError::new(43, "Also wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
-                result: Err(RPCError {
-                    code: 43,
-                    message: "Also wrong!".to_owned(),
-                    data: None,
-                }),
+                result: Err(RPCError::new(43, "Also wrong!".to_owned(), None)),
                 id: Value::Null,
             });
         } else {
