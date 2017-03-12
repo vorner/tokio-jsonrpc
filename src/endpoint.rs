@@ -24,9 +24,9 @@ use futures::{Future, IntoFuture, Stream, Sink};
 use futures::future::Either;
 use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{channel, Sender};
-use relay::{channel as relay_channel, Sender as RelaySender};
+use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
 use serde_json::{Value, to_value};
-use tokio_core::reactor::{Handle, Timeout};
+use tokio_core::reactor::{Core, Handle, Timeout};
 
 use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
 use server::{Empty as EmptyServer, Server};
@@ -112,6 +112,32 @@ impl ServerCtl {
                     &internal.handle,
                     internal.terminator.as_ref().expect("`client` called after termination`"),
                     internal.sender.as_ref().expect("`client` called after termination"))
+    }
+    // This one is for unit tests, not part of the general-purpose API. It creates a dummpy
+    // ServerCtl that does nothing, but still can be passed to the Server for checking.
+    //
+    // It returns:
+    // * The ServerCtl itself
+    // * Drop future (fires when the corresponding server would get droppend)
+    // * Kill future (fires when kill is signalled)
+    #[doc(hidden)]
+    pub fn new_test() -> (Self, RelayReceiver<()>, RelayReceiver<()>) {
+        let (drop_sender, drop_receiver) = relay_channel();
+        let (kill_sender, kill_receiver) = relay_channel();
+        let (msg_sender, _msg_receiver) = channel(1);
+        let terminator = DropTerminator(Some(drop_sender));
+        let core = Core::new().unwrap();
+        let handle = core.handle();
+
+        let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
+            stop: false,
+            terminator: Some(Rc::new(terminator)),
+            killer: Some(kill_sender),
+            idmap: Default::default(),
+            handle: handle,
+            sender: Some(msg_sender),
+        })));
+        (ctl, drop_receiver, kill_receiver)
     }
 }
 

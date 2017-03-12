@@ -83,3 +83,25 @@ impl Server for Empty{
         ctl.terminate();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::Future;
+
+    use super::*;
+
+    /// Check the empty server is somewhat sane.
+    #[test]
+    fn empty() {
+        let server = Empty;
+        let (ctl, dropped, _killed) = ServerCtl::new_test();
+        // As we can't reasonably check all possible method names, do so for just a bunch
+        for method in ["method", "notification", "check"].iter() {
+            assert!(server.rpc(&ctl, method, &None).is_none());
+            assert!(server.notification(&ctl, method, &None).is_none());
+        }
+        // It terminates the ctl on the server side on initialization
+        server.initialized(&ctl);
+        dropped.wait().unwrap();
+    }
+}
