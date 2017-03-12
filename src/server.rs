@@ -106,10 +106,15 @@ impl<S: Server> AbstractServer<S> {
     }
 }
 
+/// A RPC call result wrapping trait objects.
+pub type BoxRPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
+/// A notification call result wrapping trait objects.
+pub type BoxNotificationResult = Box<Future<Item = (), Error = ()>>;
+
 impl<S: Server> Server for AbstractServer<S> {
     type Success = Value;
-    type RPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
-    type NotificationResult = Box<Future<Item = (), Error = ()>>;
+    type RPCCallResult = BoxRPCCallResult;
+    type NotificationResult = BoxNotificationResult;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
            -> Option<Self::RPCCallResult> {
         self.0
@@ -133,6 +138,67 @@ impl<S: Server> Server for AbstractServer<S> {
     }
     fn initialized(&self, ctl: &ServerCtl) {
         self.0.initialized(ctl)
+    }
+}
+
+/// A type to store servers as trait objects.
+///
+/// See also [`AbstractServer`](struct.AbstractServer.html) and
+/// [`ServerChain`](struct.ServerChain.html).
+pub type BoxServer = Box<Server<Success = Value,
+                                RPCCallResult = Box<Future<Item = Value, Error = RPCError>>,
+                                NotificationResult = Box<Future<Item = (), Error = ()>>>>;
+
+/// A server that chains several other servers.
+///
+/// This composes multiple servers into one. When a notification or an rpc comes, it tries one by
+/// one and passes the call to each of them. If the server provides an answer, the iteration is
+/// stopped and that answer is returned. If the server refuses the given method name, another
+/// server in the chain is tried, until one is found or we run out of servers.
+///
+/// Initialization is called on all the servers.
+///
+/// The [`AbstractServer`](struct.AbstractServer.html) is one of the ways to plug servers with
+/// incompatible future and success types inside.
+pub struct ServerChain(Vec<BoxServer>);
+
+impl ServerChain {
+    /// Construct a new server.
+    pub fn new(subservers: Vec<BoxServer>) -> Self {
+        ServerChain(subservers)
+    }
+    /// Consume the server and return the subservers inside.
+    pub fn into_inner(self) -> Vec<BoxServer> {
+        self.0
+    }
+    /// Iterate through the servers and return the first result that is `Some(_)`.
+    fn iter_chain<R, F: Fn(&BoxServer) -> Option<R>>(&self, f: F) -> Option<R> {
+        for sub in self.0.iter() {
+            let result = f(sub);
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
+    }
+}
+
+impl Server for ServerChain {
+    type Success = Value;
+    type RPCCallResult = BoxRPCCallResult;
+    type NotificationResult = BoxNotificationResult;
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+           -> Option<Self::RPCCallResult> {
+        self.iter_chain(|sub| sub.rpc(ctl, method, params))
+    }
+    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+                    -> Option<Self::NotificationResult> {
+        self.iter_chain(|sub| sub.notification(ctl, method, params))
+    }
+    fn initialized(&self, ctl: &ServerCtl) {
+        for sub in self.0.iter() {
+            sub.initialized(ctl);
+        }
     }
 }
 
@@ -181,9 +247,11 @@ mod tests {
         fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
                -> Option<Self::RPCCallResult> {
             self.update(&self.rpc);
-            assert!(params.is_none());
             match method {
-                "test" => Some(Ok(true)),
+                "test" => {
+                    assert!(params.is_none());
+                    Some(Ok(true))
+                },
                 _ => None,
             }
         }
@@ -230,5 +298,48 @@ mod tests {
             initialized: RefCell::new(vec![5]),
         };
         assert_eq!(expected, log_server);
+    }
+
+    struct AnotherServer;
+
+    impl Server for AnotherServer {
+        type Success = usize;
+        type RPCCallResult = Result<usize, RPCError>;
+        type NotificationResult = Result<(), ()>;
+        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+               -> Option<Self::RPCCallResult> {
+            assert!(params.as_ref().unwrap().is_null());
+            match method {
+                "another" => Some(Ok(42)),
+                _ => None,
+            }
+        }
+        // Ignore the other methods
+    }
+
+    /// Test the chain.
+    ///
+    /// By the asserts on params in the servers we check that only whan should be called is.
+    #[test]
+    fn chain() {
+        let empty_server = Empty;
+        let log_server = LogServer::default();
+        let another_server = AnotherServer;
+        let (ctl, dropped, _killed) = ServerCtl::new_test();
+        let chain = ServerChain::new(vec![Box::new(AbstractServer::new(empty_server)),
+                                          Box::new(AbstractServer::new(log_server)),
+                                          Box::new(AbstractServer::new(another_server))]);
+        chain.initialized(&ctl);
+        dropped.wait().unwrap();
+        assert_eq!(Value::Bool(true), chain.rpc(&ctl, "test", &None).unwrap().wait().unwrap());
+        assert_eq!(json!(42), chain.rpc(&ctl, "another", &Some(Value::Null)).unwrap().wait().unwrap());
+        assert!(chain.rpc(&ctl, "wrong", &Some(Value::Null)).is_none());
+        chain.notification(&ctl, "notification", &None)
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(chain.notification(&ctl, "another", &None).is_none());
+        // It would be great to check what is logged inside the log server. But downcasting a trait
+        // object seems to be a big pain and probably isn't worth it here.
     }
 }
