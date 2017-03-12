@@ -10,8 +10,8 @@
 //! The main entrypoint here is the [Message](enum.Message.html). The others are just building
 //! blocks and you should generally work with `Message` instead.
 
-use serde::ser::{Serialize, Serializer, SerializeStruct};
-use serde::de::{Deserialize, Deserializer, Unexpected, Error};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+use serde::de::{Deserialize, Deserializer, Error, Unexpected};
 use serde_json::{Value, to_value};
 use uuid::Uuid;
 
@@ -53,18 +53,18 @@ impl Request {
     /// The ID is taken from the request.
     pub fn reply(&self, reply: Value) -> Message {
         Message::Response(Response {
-            jsonrpc: Version,
-            result: Ok(reply),
-            id: self.id.clone(),
-        })
+                              jsonrpc: Version,
+                              result: Ok(reply),
+                              id: self.id.clone(),
+                          })
     }
     /// Answer the request with an error.
     pub fn error(&self, error: RPCError) -> Message {
         Message::Response(Response {
-            jsonrpc: Version,
-            result: Err(error),
-            id: self.id.clone(),
-        })
+                              jsonrpc: Version,
+                              result: Err(error),
+                              id: self.id.clone(),
+                          })
     }
 }
 
@@ -95,7 +95,8 @@ impl RPCError {
     }
     /// Create a server error.
     pub fn server_error<E: Serialize>(e: Option<E>) -> Self {
-        RPCError::new(-32000, "Server error".to_owned(),
+        RPCError::new(-32000,
+                      "Server error".to_owned(),
                       e.map(|v| to_value(v).expect("Must be representable in JSON")))
     }
     /// Create an invalid request error.
@@ -108,7 +109,9 @@ impl RPCError {
     }
     /// Create a method not found error.
     pub fn method_not_found(method: String) -> Self {
-        RPCError::new(-32601, "Method not found".to_owned(), Some(Value::String(method)))
+        RPCError::new(-32601,
+                      "Method not found".to_owned(),
+                      Some(Value::String(method)))
     }
 }
 
@@ -168,16 +171,17 @@ impl Deserialize for Response {
             (Some(res), None) => Ok(res),
             (None, Some(err)) => Err(err),
             _ => {
-                return Err(D::Error::custom("Either 'error' or 'result' is expected, but not both"));
+                let err = D::Error::custom("Either 'error' or 'result' is expected, but not both");
+                return Err(err);
                 // A trick to make the compiler accept this branch
                 unreachable!();
             },
         };
         Ok(Response {
-            jsonrpc: Version,
-            result: result,
-            id: wr.id,
-        })
+               jsonrpc: Version,
+               result: result,
+               id: wr.id,
+           })
     }
 }
 
@@ -235,27 +239,27 @@ impl Message {
     /// The ID is auto-generated.
     pub fn request(method: String, params: Option<Value>) -> Self {
         Message::Request(Request {
-            jsonrpc: Version,
-            method: method,
-            params: params,
-            id: Value::String(Uuid::new_v4().hyphenated().to_string()),
-        })
+                             jsonrpc: Version,
+                             method: method,
+                             params: params,
+                             id: Value::String(Uuid::new_v4().hyphenated().to_string()),
+                         })
     }
     /// Create a top-level error (without an ID).
     pub fn error(error: RPCError) -> Self {
         Message::Response(Response {
-            jsonrpc: Version,
-            result: Err(error),
-            id: Value::Null,
-        })
+                              jsonrpc: Version,
+                              result: Err(error),
+                              id: Value::Null,
+                          })
     }
     /// A constructor for a notification.
     pub fn notification(method: String, params: Option<Value>) -> Self {
         Message::Notification(Notification {
-            jsonrpc: Version,
-            method: method,
-            params: params,
-        })
+                                  jsonrpc: Version,
+                                  method: method,
+                                  params: params,
+                              })
     }
 }
 
@@ -353,47 +357,47 @@ mod tests {
         // A request without parameters
         one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
             &Message::Request(Request {
-                jsonrpc: Version,
-                method: "call".to_owned(),
-                params: None,
-                id: json!(1),
-            }));
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: None,
+                                  id: json!(1),
+                              }));
         // A request with parameters
         one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
             &Message::Request(Request {
-                jsonrpc: Version,
-                method: "call".to_owned(),
-                params: Some(json!([1, 2, 3])),
-                id: json!(2),
-            }));
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: Some(json!([1, 2, 3])),
+                                  id: json!(2),
+                              }));
         // A notification (with parameters)
         one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
             &Message::Notification(Notification {
-                jsonrpc: Version,
-                method: "notif".to_owned(),
-                params: Some(json!({"x": "y"})),
-            }));
+                                       jsonrpc: Version,
+                                       method: "notif".to_owned(),
+                                       params: Some(json!({"x": "y"})),
+                                   }));
         // A successful response
         one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
             &Message::Response(Response {
-                jsonrpc: Version,
-                result: Ok(json!(42)),
-                id: json!(3),
-            }));
+                                   jsonrpc: Version,
+                                   result: Ok(json!(42)),
+                                   id: json!(3),
+                               }));
         // A successful response
         one(r#"{"jsonrpc": "2.0", "result": null, "id": 3}"#,
             &Message::Response(Response {
-                jsonrpc: Version,
-                result: Ok(Value::Null),
-                id: json!(3),
-            }));
+                                   jsonrpc: Version,
+                                   result: Ok(Value::Null),
+                                   id: json!(3),
+                               }));
         // An error
         one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
             &Message::Response(Response {
-                jsonrpc: Version,
-                result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
-                id: Value::Null,
-            }));
+                                   jsonrpc: Version,
+                                   result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
+                                   id: Value::Null,
+                               }));
         // A batch
         one(r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
@@ -417,7 +421,8 @@ mod tests {
                 {"jsonrpc": "2.0", "method": "notif"},
                 {"jsonrpc": "2.0", "method": "call", "id": 42},
                 true
-            ]"#).unwrap();
+            ]"#)
+                .unwrap();
         assert_eq!(Message::Batch(vec![
                 Message::Notification(Notification {
                     jsonrpc: Version,
@@ -458,7 +463,7 @@ mod tests {
         // Wrong version
         one(r#"{"jsonrpc": 2.0, "method": "notif"}"#);
         // A response with both result and error
-        one(r#"{"jsonrpc": "2.0", "result": 42, "error": {"code": 42, "message": "Wrong!"}, "id": 1}"#);
+        one(r#"{"jsonrpc": "2.0", "result": 42, "error": {"code": 42, "message": "!"}, "id": 1}"#);
         // A response without an id
         one(r#"{"jsonrpc": "2.0", "result": 42}"#);
         // An extra field
@@ -504,7 +509,8 @@ mod tests {
         }
         let id2 = req2.id.clone();
         // The same with an error
-        if let Message::Response(ref resp) = req2.error(RPCError::new(42, "Wrong!".to_owned(), None)) {
+        if let Message::Response(ref resp) =
+            req2.error(RPCError::new(42, "Wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
                 result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
@@ -514,7 +520,8 @@ mod tests {
             panic!("Not a response");
         }
         // When we have unmatched, we generate a top-level error with Null id.
-        if let Message::Response(ref resp) = Message::error(RPCError::new(43, "Also wrong!".to_owned(), None)) {
+        if let Message::Response(ref resp) =
+            Message::error(RPCError::new(43, "Also wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
                 result: Err(RPCError::new(43, "Also wrong!".to_owned(), None)),

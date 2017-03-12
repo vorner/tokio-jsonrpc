@@ -18,7 +18,7 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_core::io::Io;
 
-use tokio_jsonrpc::{Message, LineCodec, RPCError};
+use tokio_jsonrpc::{LineCodec, Message, RPCError};
 use tokio_jsonrpc::message::Notification;
 
 fn main() {

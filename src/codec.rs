@@ -13,7 +13,7 @@
 //! the other hand, it can recover from syntax error in a message and you can respond with an error
 //! instead of terminating the connection.
 
-use std::io::{Result as IoResult, Error, ErrorKind};
+use std::io::{Error, ErrorKind, Result as IoResult};
 
 use tokio_core::io::{Codec, EasyBuf};
 use serde_json::ser::to_vec;
@@ -41,10 +41,11 @@ fn encode_codec(msg: &Message, buf: &mut Vec<u8>) -> IoResult<()> {
     Ok(())
 }
 
-fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut EasyBuf, convert: Convert) -> IoResult<Option<Parsed>>
-    where
-        Cache: PositionCache,
-        Convert: FnOnce(&[u8]) -> Parsed {
+fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut EasyBuf, convert: Convert)
+                                -> IoResult<Option<Parsed>>
+    where Cache: PositionCache,
+          Convert: FnOnce(&[u8]) -> Parsed
+{
     // Where did we stop scanning before? Scan only the new part
     let start_pos = cache.position();
     if let Some(i) = buf.as_slice()[*start_pos..].iter().position(|&b| b == b'\n') {
@@ -124,7 +125,9 @@ impl Codec for DirtyLine {
     type In = Parsed;
     type Out = Message;
     fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
-        decode_codec(self, buf, |bytes| from_str(String::from_utf8_lossy(bytes).as_ref()))
+        decode_codec(self,
+                     buf,
+                     |bytes| from_str(String::from_utf8_lossy(bytes).as_ref()))
     }
     fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
         encode_codec(&msg, buf)
@@ -133,8 +136,8 @@ impl Codec for DirtyLine {
 
 /// A codec working with JSONRPC 2.0 messages.
 ///
-/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object boundaries,
-/// so it works with both newline-separated and object-separated encoding. It produces
+/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object
+/// boundaries, so it works with both newline-separated and object-separated encoding. It produces
 /// newline-separated stream, which is more generic.
 ///
 /// TODO: This is not implemented yet.
@@ -193,7 +196,8 @@ mod tests {
         let incomplete = Vec::from(&br#"{"jsonrpc": "2.0", "method":""#[..]);
         let mut oneandhalf = msgstring.clone();
         oneandhalf.extend_from_slice(&incomplete);
-        assert_eq!(one(&oneandhalf, &incomplete).unwrap(), Some(Ok(notif.clone())));
+        assert_eq!(one(&oneandhalf, &incomplete).unwrap(),
+                   Some(Ok(notif.clone())));
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
@@ -219,6 +223,7 @@ mod tests {
         // But the dirty one just keeps going on
         let mut dirty = DirtyLine::new();
         let result = dirty.decode(&mut buf).unwrap();
-        assert_eq!(result, Some(Ok(Message::notification("Hello �World".to_owned(), None))));
+        assert_eq!(result,
+                   Some(Ok(Message::notification("Hello �World".to_owned(), None))));
     }
 }

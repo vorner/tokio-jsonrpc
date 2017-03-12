@@ -48,7 +48,8 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
+    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
+           -> Option<Self::RPCCallResult> {
         None
     }
     /// Called when the client sends a notification.
@@ -58,7 +59,8 @@ pub trait Server {
     /// servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
+    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
+                    -> Option<Self::NotificationResult> {
         None
     }
     /// Called when the endpoint is initialized.
@@ -108,17 +110,26 @@ impl<S: Server> Server for AbstractServer<S> {
     type Success = Value;
     type RPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
     type NotificationResult = Box<Future<Item = (), Error = ()>>;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
-        self.0.rpc(ctl, method, params).map(|f| -> Box<Future<Item = Value, Error = RPCError>> {
-            Box::new(f.into_future().map(|result| to_value(result).expect("Your result type is not convertible to JSON, which is a bug")))
-        })
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+           -> Option<Self::RPCCallResult> {
+        self.0
+            .rpc(ctl, method, params)
+            .map(|f| -> Box<Future<Item = Value, Error = RPCError>> {
+                let future = f.into_future()
+                    .map(|result| {
+                        to_value(result)
+                            .expect("Your result type is not convertible to JSON, which is a bug")
+                    });
+                Box::new(future)
+            })
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::NotificationResult> {
+    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+                    -> Option<Self::NotificationResult> {
         // It seems the type signature is computed from inside the closure and it doesn't fit on
         // the outside, so we need to declare it manually :-(
-        self.0.notification(ctl, method, params).map(|f| -> Box<Future<Item = (), Error = ()>> {
-            Box::new(f.into_future())
-        })
+        self.0
+            .notification(ctl, method, params)
+            .map(|f| -> Box<Future<Item = (), Error = ()>> { Box::new(f.into_future()) })
     }
     fn initialized(&self, ctl: &ServerCtl) {
         self.0.initialized(ctl)
@@ -167,15 +178,17 @@ mod tests {
         type Success = bool;
         type RPCCallResult = Result<bool, RPCError>;
         type NotificationResult = Result<(), ()>;
-        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
+        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+               -> Option<Self::RPCCallResult> {
             self.update(&self.rpc);
             assert!(params.is_none());
             match method {
                 "test" => Some(Ok(true)),
-                _ => None
+                _ => None,
             }
         }
-        fn notification(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::NotificationResult> {
+        fn notification(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+                        -> Option<Self::NotificationResult> {
             self.update(&self.notification);
             assert!(params.is_none());
             match method {
@@ -197,9 +210,15 @@ mod tests {
         let log_server = LogServer::default();
         let abstract_server = AbstractServer::new(log_server);
         let (ctl, _, _) = ServerCtl::new_test();
-        let rpc_result = abstract_server.rpc(&ctl, "test", &None).unwrap().wait().unwrap();
+        let rpc_result = abstract_server.rpc(&ctl, "test", &None)
+            .unwrap()
+            .wait()
+            .unwrap();
         assert_eq!(Value::Bool(true), rpc_result);
-        abstract_server.notification(&ctl, "notification", &None).unwrap().wait().unwrap();
+        abstract_server.notification(&ctl, "notification", &None)
+            .unwrap()
+            .wait()
+            .unwrap();
         assert!(abstract_server.rpc(&ctl, "another", &None).is_none());
         assert!(abstract_server.notification(&ctl, "another", &None).is_none());
         abstract_server.initialized(&ctl);

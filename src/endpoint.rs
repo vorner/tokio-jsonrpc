@@ -20,15 +20,15 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::cell::RefCell;
 
-use futures::{Future, IntoFuture, Stream, Sink};
+use futures::{Future, IntoFuture, Sink, Stream};
 use futures::future::Either;
 use futures::stream::{self, Once, empty, unfold};
-use futures_mpsc::{channel, Sender};
-use relay::{channel as relay_channel, Sender as RelaySender, Receiver as RelayReceiver};
+use futures_mpsc::{Sender, channel};
+use relay::{Receiver as RelayReceiver, Sender as RelaySender, channel as relay_channel};
 use serde_json::{Value, to_value};
 use tokio_core::reactor::{Core, Handle, Timeout};
 
-use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
+use message::{Broken, Message, Notification, Parsed, RPCError, Request, Response};
 use server::{Empty as EmptyServer, Server};
 
 /// Thing that terminates the connection once dropped.
@@ -38,7 +38,10 @@ struct DropTerminator(Option<RelaySender<()>>);
 
 impl Drop for DropTerminator {
     fn drop(&mut self) {
-        self.0.take().unwrap().complete(());
+        self.0
+            .take()
+            .unwrap()
+            .complete(());
     }
 }
 
@@ -94,7 +97,9 @@ impl ServerCtl {
     pub fn kill(&self) {
         self.cleanup(|internal| {
             // The option might be None, but only after we called it already.
-            internal.killer.take().map(|s| s.complete(()));
+            internal.killer
+                .take()
+                .map(|s| s.complete(()));
         });
     }
     /// Create a new client for the current endpoint.
@@ -110,8 +115,12 @@ impl ServerCtl {
         Client::new(&internal.idmap,
                     self,
                     &internal.handle,
-                    internal.terminator.as_ref().expect("`client` called after termination`"),
-                    internal.sender.as_ref().expect("`client` called after termination"))
+                    internal.terminator
+                        .as_ref()
+                        .expect("`client` called after termination`"),
+                    internal.sender
+                        .as_ref()
+                        .expect("`client` called after termination"))
     }
     // This one is for unit tests, not part of the general-purpose API. It creates a dummpy
     // ServerCtl that does nothing, but still can be passed to the Server for checking.
@@ -130,13 +139,13 @@ impl ServerCtl {
         let handle = core.handle();
 
         let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-            stop: false,
-            terminator: Some(Rc::new(terminator)),
-            killer: Some(kill_sender),
-            idmap: Default::default(),
-            handle: handle,
-            sender: Some(msg_sender),
-        })));
+                                                     stop: false,
+                                                     terminator: Some(Rc::new(terminator)),
+                                                     killer: Some(kill_sender),
+                                                     idmap: Default::default(),
+                                                     handle: handle,
+                                                     sender: Some(msg_sender),
+                                                 })));
         (ctl, drop_receiver, kill_receiver)
     }
 }
@@ -159,19 +168,29 @@ fn shouldnt_happen<E>(_: E) -> IoError {
     IoError::new(ErrorKind::Other, "Shouldn't happen")
 }
 
-fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, request: Request) -> FutureMessage {
+fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, request: Request)
+                                           -> FutureMessage {
     match server.rpc(ctl, &request.method, &request.params) {
-        None => Box::new(Ok(Some(request.error(RPCError::method_not_found(request.method.clone())))).into_future()),
+        None => {
+            let reply = request.error(RPCError::method_not_found(request.method.clone()));
+            Box::new(Ok(Some(reply)).into_future())
+        },
         Some(future) => {
-            Box::new(future.into_future().then(move |result| match result {
-                Err(err) => Ok(Some(request.error(err))),
-                Ok(result) => Ok(Some(request.reply(to_value(result).expect("Trying to return a value that can't be converted to JSON")))),
-            }))
+            let result = future.into_future()
+                .then(move |result| match result {
+                          Err(err) => Ok(Some(request.error(err))),
+                          Ok(result) => {
+                              Ok(Some(request.reply(to_value(result).expect("Bad result type"))))
+                          },
+                      });
+            Box::new(result)
         },
     }
 }
 
-fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl, notification: &Notification) -> FutureMessage {
+fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl,
+                                      notification: &Notification)
+                                      -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => Box::new(Ok(None).into_future()),
         // We ignore both success and error, so we convert it into something for now
@@ -183,7 +202,9 @@ fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl, notif
 // stream of the computations which return nothing, but gather the results. Then we add yet another
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
-fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap, msg: Vec<Message>) -> FutureMessageStream {
+fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap,
+                                         msg: Vec<Message>)
+                                         -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
     // future gets its turn, so shorter one could lead to a deadlock.
     let (sender, receiver) = channel(msg.len());
@@ -205,18 +226,20 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, id
             // Also, it is a bit unfortunate how we need to allocate so many times here. We may try
             // doing something about that in the future, but without implementing custom future and
             // stream types, this seems the best we can do.
-            let all_sent = do_msg(server, ctl, idmap, Ok(sub)).and_then(move |future_message| -> Result<FutureMessage, _> {
-                let sender = sender.clone();
-                let msg_sent = future_message.and_then(move |response: Option<Message>| match response {
-                    None => Either::A(Ok(None).into_future()),
-                    Some(msg) => {
-                        Either::B(sender.send(msg)
-                            .map_err(shouldnt_happen)
-                            .map(|_| None))
-                    },
+            let all_sent = do_msg(server, ctl, idmap, Ok(sub))
+                .and_then(move |future_message| -> Result<FutureMessage, _> {
+                    let sender = sender.clone();
+                    let msg_sent =
+                        future_message.and_then(move |response: Option<Message>| match response {
+                                                    None => Either::A(Ok(None).into_future()),
+                                                    Some(msg) => {
+                                                        Either::B(sender.send(msg)
+                                                                      .map_err(shouldnt_happen)
+                                                                      .map(|_| None))
+                                                    },
+                                                });
+                    Ok(Box::new(msg_sent))
                 });
-                Ok(Box::new(msg_sent))
-            });
             Ok(all_sent)
         })
         .collect();
@@ -226,11 +249,11 @@ fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, id
     let collected = receiver.collect()
         .map_err(shouldnt_happen)
         .map(|results| if results.is_empty() {
-            // The spec says to send nothing at all if there are no results
-            None
-        } else {
-            Some(Message::Batch(results))
-        });
+                 // The spec says to send nothing at all if there are no results
+                 None
+             } else {
+                 Some(Message::Batch(results))
+             });
     let streamed: Once<FutureMessage, _> = once(Box::new(collected));
     // Connect the wrapping single-item stream after the work stream
     Box::new(subs_stream.chain(streamed))
@@ -249,8 +272,12 @@ fn do_response(idmap: &IDMap, response: Response) -> FutureMessageStream {
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
-fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap, msg: Parsed) -> FutureMessageStream {
-    let terminated = ctl.0.borrow().stop;
+fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap,
+                                       msg: Parsed)
+                                       -> FutureMessageStream {
+    let terminated = ctl.0
+        .borrow()
+        .stop;
     if terminated {
         if let Ok(Message::Response(response)) = msg {
             do_response(idmap, response);
@@ -263,9 +290,13 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idma
                 Box::new(once(err))
             },
             Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req))),
-            Ok(Message::Notification(notif)) => Box::new(once(do_notification(server, ctl, &notif))),
+            Ok(Message::Notification(notif)) => {
+                Box::new(once(do_notification(server, ctl, &notif)))
+            },
             Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, batch),
-            Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, idmap, Err(Broken::Unmatched(value))),
+            Ok(Message::UnmatchedSub(value)) => {
+                do_msg(server, ctl, idmap, Err(Broken::Unmatched(value)))
+            },
             Ok(Message::Response(response)) => do_response(idmap, response),
         }
     }
@@ -302,7 +333,9 @@ pub type RPCSent = BoxFuture<(Client, RPCFinished), IoError>;
 
 impl Client {
     /// A constructor (a private one).
-    fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop, sender: &Sender<Message>) -> Self {
+    fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop,
+           sender: &Sender<Message>)
+           -> Self {
         Client {
             sender: sender.clone(),
             data: ClientData {
@@ -362,7 +395,9 @@ impl Client {
             // If we don't have the timeout, simply pass the future to get the response through.
             None => Box::new(received),
         };
-        data.idmap.borrow_mut().insert(id, sender);
+        data.idmap
+            .borrow_mut()
+            .insert(id, sender);
         // Ensure the connection is kept alive until the answer comes
         let sent = self.sender
             .send(msg)
@@ -459,11 +494,11 @@ pub struct Endpoint<Connection, RPCServer> {
 }
 
 impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
-    where
-        Connection: Stream<Item = Parsed, Error = IoError>,
-        Connection: Sink<SinkItem = Message, SinkError = IoError>,
-        Connection: Send + 'static,
-        RPCServer: Server + 'static {
+    where Connection: Stream<Item = Parsed, Error = IoError>,
+          Connection: Sink<SinkItem = Message, SinkError = IoError>,
+          Connection: Send + 'static,
+          RPCServer: Server + 'static
+{
     /// Create the endpoint builder.
     ///
     /// Pass it the connection to build the endpoint on and the server to use internally.
@@ -500,13 +535,13 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         let idmap = Rc::new(RefCell::new(HashMap::new()));
         let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
         let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-            stop: false,
-            terminator: Some(rc_terminator.clone()),
-            killer: Some(killer_sender),
-            idmap: idmap.clone(),
-            handle: handle.clone(),
-            sender: Some(sender.clone()),
-        })));
+                                                     stop: false,
+                                                     terminator: Some(rc_terminator.clone()),
+                                                     killer: Some(killer_sender),
+                                                     idmap: idmap.clone(),
+                                                     handle: handle.clone(),
+                                                     sender: Some(sender.clone()),
+                                                 })));
         let client = Client::new(&idmap, &ctl, handle, &rc_terminator, &sender);
         let (sink, stream) = self.connection.split();
         // Create a future for each received item that'll return something. Run some of them in
@@ -564,18 +599,18 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
         handle.spawn(transmitted);
         let finished_errors = error_receiver.map_err(shouldnt_happen)
             .and_then(|maybe_error| match maybe_error {
-                None => Ok(()),
-                Some(e) => Err(e),
-            });
+                          None => Ok(()),
+                          Some(e) => Err(e),
+                      });
         (client, Box::new(finished_errors))
     }
 }
 
 impl<Connection> Endpoint<Connection, EmptyServer>
-    where
-        Connection: Stream<Item = Parsed, Error = IoError>,
-        Connection: Sink<SinkItem = Message, SinkError = IoError>,
-        Connection: Send + 'static {
+    where Connection: Stream<Item = Parsed, Error = IoError>,
+          Connection: Sink<SinkItem = Message, SinkError = IoError>,
+          Connection: Send + 'static
+{
     /// Create an endpoint with [`Empty`](../server/struct.Empty.html).
     ///
     /// If you want to have client only, you can use this instead of `new`.

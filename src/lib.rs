@@ -14,7 +14,8 @@
 //!
 //! # Examples
 //!
-//! A skeleton of reading messages from the other side, mapping them to answers and sending them back.
+//! A skeleton of reading messages from the other side, mapping them to answers and sending them
+//! back.
 //!
 //! ```rust
 //! # extern crate tokio_core;
@@ -122,7 +123,6 @@ pub mod message;
 pub mod server;
 
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
-pub use endpoint::{Endpoint, Client, ServerCtl};
+pub use endpoint::{Client, Endpoint, ServerCtl};
 pub use message::{Message, Parsed, RPCError};
 pub use server::Server;
-

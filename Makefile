@@ -14,6 +14,7 @@ test:
 check: all test
 	cargo doc
 	cargo clippy
+	cargo fmt
 
 clean:
 	cargo clean

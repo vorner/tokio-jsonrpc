@@ -23,11 +23,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::{Future, Stream};
 use tokio_core::io::Io;
-use tokio_core::reactor::{Handle, Interval, Core};
+use tokio_core::reactor::{Core, Handle, Interval};
 use tokio_core::net::TcpListener;
 use serde_json::{Value, from_value};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, Server, ServerCtl, RPCError};
+use tokio_jsonrpc::{Endpoint, LineCodec, RPCError, Server, ServerCtl};
 
 /// A helper struct to deserialize the parameters
 #[derive(Deserialize)]
@@ -39,7 +39,10 @@ struct SubscribeParams {
 
 /// Number of seconds since epoch
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// The server implementation
@@ -56,7 +59,8 @@ impl Server for TimeServer {
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>) -> Option<Self::RPCCallResult> {
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+           -> Option<Self::RPCCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
             "now" => Some(Ok(Value::Number(now().into()))),
@@ -75,7 +79,7 @@ impl Server for TimeServer {
                 let handle = self.0.clone();
                 // Get a stream that „ticks“
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
-                    .or_else(|e| Err(RPCError::server_error(Some(format!("Can't start interval: {}", e)))))
+                    .or_else(|e| Err(RPCError::server_error(Some(format!("Interval: {}", e)))))
                     .map(move |interval| {
                         // And send the notification on each tick (and pass the client through)
                         let notified = interval.fold(client, |client, _| {
@@ -83,8 +87,8 @@ impl Server for TimeServer {
                             })
                             // So it can be spawned, spawn needs ().
                             .map(|_| ())
-                            // TODO: This reports a „Shouldn't happen“ error ‒ do something about
-                            // that
+                            // TODO: This reports a „Shouldn't happen“ error ‒ do something
+                            // about that
                             .map_err(|e| println!("Error notifying: {}", e));
                         handle.spawn(notified);
                         // We need some result, but we don't send any meaningful value
@@ -107,9 +111,12 @@ fn main() {
     let service = listener.incoming()
         .for_each(move |(connection, addr)| {
             // Once a connection is made, create an endpoint on it, using the above server
-            let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()), TimeServer(handle.clone())).start(&handle);
+            let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()),
+                                                    TimeServer(handle.clone()))
+                    .start(&handle);
             // If it finishes with an error, report it
-            let err_report = finished.map_err(move |e| println!("Problem on client {}: {}", addr, e));
+            let err_report =
+                finished.map_err(move |e| println!("Problem on client {}: {}", addr, e));
             handle.spawn(err_report);
             // Just so the for_each is happy, nobody actually uses this
             Ok(())

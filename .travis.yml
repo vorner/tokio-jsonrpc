@@ -9,9 +9,9 @@ os:
     - osx
 before_script:
     - |
+      (travis_wait cargo install rustfmt || true) &&
       (test "$TRAVIS_RUST_VERSION" != nightly || travis_wait cargo install --force clippy || true)
 
-# TODO: Once the incremental build works well, reintroduce it
 script:
     - |
       export PATH="$PATH":~/.cargo/bin &&
@@ -20,7 +20,8 @@ script:
       cargo build &&
       cargo test &&
       cargo doc --no-deps &&
-      (test "$TRAVIS_RUST_VERSION" != nightly || cargo clippy -- --deny clippy)
+      (test "$TRAVIS_RUST_VERSION" != nightly || cargo clippy -- --deny clippy) &&
+      cargo fmt
 
 matrix:
     allow_failures:
