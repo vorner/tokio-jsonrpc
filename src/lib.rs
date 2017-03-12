@@ -116,10 +116,13 @@ extern crate futures;
 extern crate futures_mpsc;
 extern crate relay;
 
-pub mod message;
 pub mod codec;
 pub mod endpoint;
+pub mod message;
+pub mod server;
 
-pub use message::{Message, Parsed, RPCError};
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
-pub use endpoint::{Endpoint, Client, Server, ServerCtl};
+pub use endpoint::{Endpoint, Client, ServerCtl};
+pub use message::{Message, Parsed, RPCError};
+pub use server::Server;
+

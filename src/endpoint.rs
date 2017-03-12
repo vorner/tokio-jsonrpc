@@ -9,9 +9,10 @@
 //!
 //! This module helps building the endpoints of the connection. The endpoints act as both client
 //! and server at the same time. If you want a client-only endpoint, use
-//! [`EmptyServer`](struct.EmptyServer.html) as the server or the relevant
+//! [`Empty`](../server/struct.Empty.html) as the server or the relevant
 //! [`Endpoint`](struct.Endpoint.html)'s constructor. If you want a server-only endpoint,
-//! simply don't call any RPCs or notifications.
+//! simply don't call any RPCs or notifications and forget about the returned
+//! [`Client`](struct.Client.html) structure.
 
 use std::io::{self, Error as IoError, ErrorKind};
 use std::collections::HashMap;
@@ -19,16 +20,16 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::cell::RefCell;
 
-use serde::Serialize;
-use serde_json::{Value, to_value};
 use futures::{Future, IntoFuture, Stream, Sink};
 use futures::future::Either;
 use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{channel, Sender};
 use relay::{channel as relay_channel, Sender as RelaySender};
+use serde_json::{Value, to_value};
 use tokio_core::reactor::{Handle, Timeout};
 
 use message::{Broken, Message, Parsed, Response, Request, RPCError, Notification};
+use server::{Empty as EmptyServer, Server};
 
 /// Thing that terminates the connection once dropped.
 ///
@@ -61,9 +62,9 @@ struct ServerCtlInternal {
 
 /// A handle to control the server.
 ///
-/// An instance is provided to each [`Server`](trait.Server.html) callback and it can be used to
-/// manipulate the server (currently only to terminate the server) or to create a client for the
-/// use of the server.
+/// An instance is provided to each [`Server`](../server/trait.Server.html) callback and it can be
+/// used to manipulate the server (currently only to terminate the server) or to create a client
+/// for the use of the server.
 #[derive(Clone)]
 pub struct ServerCtl(Rc<RefCell<ServerCtlInternal>>);
 
@@ -112,59 +113,6 @@ impl ServerCtl {
                     internal.terminator.as_ref().expect("`client` called after termination`"),
                     internal.sender.as_ref().expect("`client` called after termination"))
     }
-}
-
-/// The server endpoint.
-///
-/// This is usually implemented by the end application and provides the actual functionality of the
-/// RPC server. It allows composition of more servers together.
-///
-/// In future it might be possible to generate servers with the help of some macros. Currently it
-/// is up to the developer to handle conversion of parameters, etc.
-///
-/// The default implementations of the callbacks return None, indicating that the given method is
-/// not known. It allows implementing only RPCs or only notifications without having to worry about
-/// the other callback. If you want a server that does nothing at all, use
-/// [`EmptyServer`](struct.EmptyServer.html).
-pub trait Server {
-    /// The successfull result of the RPC call.
-    type Success: Serialize;
-    /// The result of the RPC call
-    ///
-    /// Once the future resolves, the value or error is sent to the client as the reply. The reply
-    /// is wrapped automatically.
-    type RPCCallResult: IntoFuture<Item = Self::Success, Error = RPCError>;
-    /// The result of the RPC call.
-    ///
-    /// As the client doesn't expect anything in return, both the success and error results are
-    /// thrown away and therefore (). However, it still makes sense to distinguish success and
-    /// error.
-    type NotificationResult: IntoFuture<Item = (), Error = ()> + 'static;
-    /// Called when the client requests something.
-    ///
-    /// This is a callback from the [endpoint](struct.Endpoint.html) when the client requests
-    /// something. If the method is unknown, it shall return `None`. This allows composition of
-    /// servers.
-    ///
-    /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::RPCCallResult> {
-        None
-    }
-    /// Called when the client sends a notification.
-    ///
-    /// This is a callback from the [endpoint](struct.Endpoint.html) when the client requests
-    /// something. If the method is unknown, it shall return `None`. This allows composition of
-    /// servers.
-    ///
-    /// Conversion of parameters and handling of errors is up to the implementer of this trait.
-    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>) -> Option<Self::NotificationResult> {
-        None
-    }
-    /// Called when the endpoint is initialized.
-    ///
-    /// It provides a default empty implementation, which can be overriden to hook onto the
-    /// initialization.
-    fn initialized(&self, _ctl: &ServerCtl) {}
 }
 
 // Our own BoxFuture & friends that is *not* send. We don't do send.
@@ -294,22 +242,6 @@ fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idma
             Ok(Message::UnmatchedSub(value)) => do_msg(server, ctl, idmap, Err(Broken::Unmatched(value))),
             Ok(Message::Response(response)) => do_response(idmap, response),
         }
-    }
-}
-
-/// A RPC server that knows no methods.
-///
-/// You can use this if you want to have a client-only [Endpoint](struct.Endpoint.html). It simply
-/// terminates the server part right away. Or, more conveniently, use `Endpoint`'s
-/// [`client_only`](struct.Endpoint.html#method.client_only) method.
-pub struct EmptyServer;
-
-impl Server for EmptyServer {
-    type Success = ();
-    type RPCCallResult = Result<(), RPCError>;
-    type NotificationResult = Result<(), ()>;
-    fn initialized(&self, ctl: &ServerCtl) {
-        ctl.terminate();
     }
 }
 
@@ -531,7 +463,7 @@ impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
     /// The future yields if there was any error running the server. The server is started on the
     /// provided handle. It can be manipulated by the [`ServerCtl`](struct.ServerCtl.html), which
     /// is accessible through the returned [`Client`](struct.Client.html) and is passed to each
-    /// [`Server`](trait.Server.html) callback.
+    /// [`Server`](../server/trait.Server.html) callback.
     // TODO: Description how this works.
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
     // TODO: Should we return a better error/return the error once thing resolves?
@@ -618,7 +550,7 @@ impl<Connection> Endpoint<Connection, EmptyServer>
         Connection: Stream<Item = Parsed, Error = IoError>,
         Connection: Sink<SinkItem = Message, SinkError = IoError>,
         Connection: Send + 'static {
-    /// Create an endpoint with [`EmptyServer`](struct.EmptyServer.html).
+    /// Create an endpoint with [`Empty`](../server/struct.Empty.html).
     ///
     /// If you want to have client only, you can use this instead of `new`.
     pub fn client_only(connection: Connection) -> Self {
