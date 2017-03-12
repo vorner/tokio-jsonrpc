@@ -5,3 +5,4 @@
 • Batches on the client side
 • Some high-level description how it works, on the docs front page.
 • Go through the documentation and use third form everywhere (eg. „returns“ instead of „return“)
+• Style RPCError should be RpcError. Same for RPCCallResult and possibly others.
