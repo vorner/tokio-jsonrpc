@@ -1,3 +1,9 @@
+# 0.4.0:
+
+* Rename RPCError to RpcError (and similar), according to the style guide.
+* Move the `Server` trait to its own module.
+* Provide some tools to compose servers (`AbstractServer`, `ServerChain`).
+
 # 0.3.0:
 
 Cleanups in documentaion in API. The functionality is the same, but the API is
