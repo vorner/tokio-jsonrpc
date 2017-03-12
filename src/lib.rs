@@ -10,7 +10,8 @@
 //! This implements the handling of the
 //! [JSON RPC 2.0](http://www.jsonrpc.org/specification) specification. The low-level parts are in
 //! the [`message`](message/index.html) and the [`codec`](codec/index.html) modules. The first
-//! draft of the higher-lever API is in the [`endpoint`](endpoint/index.html) module.
+//! draft of the higher-lever API is in the [`endpoint`](endpoint/index.html) module. Some helpers
+//! to compose the server part is in the [`server`](server/index.html) module.
 //!
 //! # Examples
 //!
