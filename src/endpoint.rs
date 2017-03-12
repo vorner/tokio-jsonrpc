@@ -28,7 +28,7 @@ use relay::{Receiver as RelayReceiver, Sender as RelaySender, channel as relay_c
 use serde_json::{Value, to_value};
 use tokio_core::reactor::{Core, Handle, Timeout};
 
-use message::{Broken, Message, Notification, Parsed, RpcError, Request, Response};
+use message::{Broken, Message, Notification, Parsed, Request, Response, RpcError};
 use server::{Empty as EmptyServer, Server};
 
 /// Thing that terminates the connection once dropped.

@@ -308,7 +308,9 @@ mod tests {
         type NotificationResult = Result<(), ()>;
         fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
                -> Option<Self::RpcCallResult> {
-            assert!(params.as_ref().unwrap().is_null());
+            assert!(params.as_ref()
+                        .unwrap()
+                        .is_null());
             match method {
                 "another" => Some(Ok(42)),
                 _ => None,
@@ -331,8 +333,16 @@ mod tests {
                                           Box::new(AbstractServer::new(another_server))]);
         chain.initialized(&ctl);
         dropped.wait().unwrap();
-        assert_eq!(Value::Bool(true), chain.rpc(&ctl, "test", &None).unwrap().wait().unwrap());
-        assert_eq!(json!(42), chain.rpc(&ctl, "another", &Some(Value::Null)).unwrap().wait().unwrap());
+        assert_eq!(Value::Bool(true),
+                   chain.rpc(&ctl, "test", &None)
+                       .unwrap()
+                       .wait()
+                       .unwrap());
+        assert_eq!(json!(42),
+                   chain.rpc(&ctl, "another", &Some(Value::Null))
+                       .unwrap()
+                       .wait()
+                       .unwrap());
         assert!(chain.rpc(&ctl, "wrong", &Some(Value::Null)).is_none());
         chain.notification(&ctl, "notification", &None)
             .unwrap()
