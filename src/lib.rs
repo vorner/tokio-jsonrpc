@@ -60,7 +60,7 @@
 //! # use tokio_core::net::TcpListener;
 //! # use tokio_core::io::Io;
 //! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
-//! # use futures::{Stream};
+//! # use futures::{Future, Stream};
 //! # use serde_json::Value;
 //! #
 //! # fn main() {
@@ -95,9 +95,12 @@
 //!
 //! let connections = listener.incoming().for_each(|(stream, _)| {
 //!     // Greet every new connection
-//!     Endpoint::new(stream.framed(LineCodec::new()), UselessServer).start(&handle)
-//!         .0
-//!         .notify("hello".to_owned(), None);
+//!     let (client, _) = Endpoint::new(stream.framed(LineCodec::new()), UselessServer)
+//!         .start(&handle);
+//!     let notified = client.notify("hello".to_owned(), None)
+//!         .map(|_| ())
+//!         .map_err(|_| ());
+//!     handle.spawn(notified);
 //!     Ok(())
 //! });
 //!
