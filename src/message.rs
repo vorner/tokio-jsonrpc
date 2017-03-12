@@ -59,7 +59,7 @@ impl Request {
                           })
     }
     /// Answer the request with an error.
-    pub fn error(&self, error: RPCError) -> Message {
+    pub fn error(&self, error: RpcError) -> Message {
         Message::Response(Response {
                               jsonrpc: Version,
                               result: Err(error),
@@ -71,19 +71,19 @@ impl Request {
 /// An error code.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct RPCError {
+pub struct RpcError {
     pub code: i64,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
-impl RPCError {
+impl RpcError {
     /// A generic constructor.
     ///
     /// Mostly for completeness, doesn't do anything but filling in the corresponding fields.
     pub fn new(code: i64, message: String, data: Option<Value>) -> Self {
-        RPCError {
+        RpcError {
             code: code,
             message: message,
             data: data,
@@ -91,25 +91,25 @@ impl RPCError {
     }
     /// Create an Invalid Param error.
     pub fn invalid_params() -> Self {
-        RPCError::new(-32602, "Invalid params".to_owned(), None)
+        RpcError::new(-32602, "Invalid params".to_owned(), None)
     }
     /// Create a server error.
     pub fn server_error<E: Serialize>(e: Option<E>) -> Self {
-        RPCError::new(-32000,
+        RpcError::new(-32000,
                       "Server error".to_owned(),
                       e.map(|v| to_value(v).expect("Must be representable in JSON")))
     }
     /// Create an invalid request error.
     pub fn invalid_request() -> Self {
-        RPCError::new(-32600, "Invalid request".to_owned(), None)
+        RpcError::new(-32600, "Invalid request".to_owned(), None)
     }
     /// Create a parse error.
     pub fn parse_error(e: String) -> Self {
-        RPCError::new(-32700, "Parse error".to_owned(), Some(Value::String(e)))
+        RpcError::new(-32700, "Parse error".to_owned(), Some(Value::String(e)))
     }
     /// Create a method not found error.
     pub fn method_not_found(method: String) -> Self {
-        RPCError::new(-32601,
+        RpcError::new(-32601,
                       "Method not found".to_owned(),
                       Some(Value::String(method)))
     }
@@ -121,7 +121,7 @@ impl RPCError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     jsonrpc: Version,
-    pub result: Result<Value, RPCError>,
+    pub result: Result<Value, RpcError>,
     pub id: Value,
 }
 
@@ -156,7 +156,7 @@ struct WireResponse {
     // Make sure we accept null as Some(Value::Null), instead of going to None
     #[serde(default, deserialize_with = "some_value")]
     result: Option<Value>,
-    error: Option<RPCError>,
+    error: Option<RpcError>,
     id: Value,
 }
 
@@ -246,7 +246,7 @@ impl Message {
                          })
     }
     /// Create a top-level error (without an ID).
-    pub fn error(error: RPCError) -> Self {
+    pub fn error(error: RpcError) -> Self {
         Message::Response(Response {
                               jsonrpc: Version,
                               result: Err(error),
@@ -283,8 +283,8 @@ impl Broken {
     /// with the right values.
     pub fn reply(&self) -> Message {
         match *self {
-            Broken::Unmatched(_) => Message::error(RPCError::invalid_request()),
-            Broken::SyntaxError(ref e) => Message::error(RPCError::parse_error(e.clone())),
+            Broken::Unmatched(_) => Message::error(RpcError::invalid_request()),
+            Broken::SyntaxError(ref e) => Message::error(RpcError::parse_error(e.clone())),
         }
     }
 }
@@ -395,7 +395,7 @@ mod tests {
         one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
             &Message::Response(Response {
                                    jsonrpc: Version,
-                                   result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
+                                   result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
                                    id: Value::Null,
                                }));
         // A batch
@@ -510,10 +510,10 @@ mod tests {
         let id2 = req2.id.clone();
         // The same with an error
         if let Message::Response(ref resp) =
-            req2.error(RPCError::new(42, "Wrong!".to_owned(), None)) {
+            req2.error(RpcError::new(42, "Wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
-                result: Err(RPCError::new(42, "Wrong!".to_owned(), None)),
+                result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
                 id: id2,
             });
         } else {
@@ -521,10 +521,10 @@ mod tests {
         }
         // When we have unmatched, we generate a top-level error with Null id.
         if let Message::Response(ref resp) =
-            Message::error(RPCError::new(43, "Also wrong!".to_owned(), None)) {
+            Message::error(RpcError::new(43, "Also wrong!".to_owned(), None)) {
             assert_eq!(*resp, Response {
                 jsonrpc: Version,
-                result: Err(RPCError::new(43, "Also wrong!".to_owned(), None)),
+                result: Err(RpcError::new(43, "Also wrong!".to_owned(), None)),
                 id: Value::Null,
             });
         } else {

@@ -24,7 +24,7 @@ use tokio_core::net::{TcpListener, TcpStream};
 use tokio_core::io::{Framed, Io};
 use serde_json::{Value, from_value};
 
-use tokio_jsonrpc::{Client, Endpoint, LineCodec, RPCError, Server, ServerCtl};
+use tokio_jsonrpc::{Client, Endpoint, LineCodec, RpcError, Server, ServerCtl};
 
 /// A test server
 ///
@@ -34,10 +34,10 @@ struct AnswerServer;
 
 impl Server for AnswerServer {
     type Success = u32;
-    type RPCCallResult = Result<u32, RPCError>;
+    type RpcCallResult = Result<u32, RpcError>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         ctl.terminate();
         assert_eq!(method, "test");
         assert!(params.is_none());
@@ -148,10 +148,10 @@ struct AnotherServer(Handle, Cell<usize>);
 /// It terminates after receiving .1 requests.
 impl Server for AnotherServer {
     type Success = bool;
-    type RPCCallResult = BoxFuture<bool, RPCError>;
+    type RpcCallResult = BoxFuture<bool, RpcError>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         let mut num = self.1.get();
         num -= 1;
         self.1.set(num);
@@ -166,7 +166,7 @@ impl Server for AnotherServer {
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
                 .map(|_| true)
-                .or_else(|e| Err(RPCError::server_error(Some(format!("{}", e)))))
+                .or_else(|e| Err(RpcError::server_error(Some(format!("{}", e)))))
                 .boxed();
             Some(timeout)
         } else if method == "kill" {
@@ -195,7 +195,7 @@ fn wrong_method() {
         client.call("wrong".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(|response| {
-                assert_eq!(RPCError {
+                assert_eq!(RpcError {
                                code: -32601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
@@ -314,7 +314,7 @@ fn parallel() {
         let client2_finished = client.call("wrong".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
-                assert_eq!(RPCError {
+                assert_eq!(RpcError {
                                code: -32601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
@@ -349,7 +349,7 @@ fn seq() {
                 let client2_finished = client.call("wrong".to_owned(), None, None)
                     .and_then(|(_client, answered)| answered)
                     .map(move |response| {
-                        assert_eq!(RPCError {
+                        assert_eq!(RpcError {
                                        code: -32601,
                                        message: "Method not found".to_owned(),
                                        data: Some(json!("wrong")),
@@ -440,7 +440,7 @@ fn kill_client() {
         let client2_finished = client.call("wrong".to_owned(), None, None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
-                assert_eq!(RPCError {
+                assert_eq!(RpcError {
                                code: -32601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
@@ -460,15 +460,15 @@ struct MutualServer;
 
 impl Server for MutualServer {
     type Success = Value;
-    type RPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
+    type RpcCallResult = Box<Future<Item = Value, Error = RpcError>>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         if method == "ask" {
             let result = ctl.client()
                 .notify("terminate".to_owned(), None)
                 .map(|_| Value::Null)
-                .or_else(|e| Err(RPCError::server_error(Some(format!("{}", e)))));
+                .or_else(|e| Err(RpcError::server_error(Some(format!("{}", e)))));
             Some(Box::new(result))
         } else {
             None

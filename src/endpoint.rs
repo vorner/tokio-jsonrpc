@@ -28,7 +28,7 @@ use relay::{Receiver as RelayReceiver, Sender as RelaySender, channel as relay_c
 use serde_json::{Value, to_value};
 use tokio_core::reactor::{Core, Handle, Timeout};
 
-use message::{Broken, Message, Notification, Parsed, RPCError, Request, Response};
+use message::{Broken, Message, Notification, Parsed, RpcError, Request, Response};
 use server::{Empty as EmptyServer, Server};
 
 /// Thing that terminates the connection once dropped.
@@ -168,11 +168,11 @@ fn shouldnt_happen<E>(_: E) -> IoError {
     IoError::new(ErrorKind::Other, "Shouldn't happen")
 }
 
-fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, request: Request)
+fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, request: Request)
                                            -> FutureMessage {
     match server.rpc(ctl, &request.method, &request.params) {
         None => {
-            let reply = request.error(RPCError::method_not_found(request.method.clone()));
+            let reply = request.error(RpcError::method_not_found(request.method.clone()));
             Box::new(Ok(Some(reply)).into_future())
         },
         Some(future) => {
@@ -188,7 +188,7 @@ fn do_request<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, 
     }
 }
 
-fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl,
+fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
                                       notification: &Notification)
                                       -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
@@ -202,7 +202,7 @@ fn do_notification<RPCServer: Server>(server: &RPCServer, ctl: &ServerCtl,
 // stream of the computations which return nothing, but gather the results. Then we add yet another
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
-fn do_batch<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap,
+fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
                                          msg: Vec<Message>)
                                          -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
@@ -272,7 +272,7 @@ fn do_response(idmap: &IDMap, response: Response) -> FutureMessageStream {
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
-fn do_msg<RPCServer: Server + 'static>(server: &RPCServer, ctl: &ServerCtl, idmap: &IDMap,
+fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
                                        msg: Parsed)
                                        -> FutureMessageStream {
     let terminated = ctl.0
@@ -328,8 +328,8 @@ pub struct Client {
 }
 
 pub type Notified = BoxFuture<Client, IoError>;
-pub type RPCFinished = BoxFuture<Option<Response>, IoError>;
-pub type RPCSent = BoxFuture<(Client, RPCFinished), IoError>;
+pub type RpcFinished = BoxFuture<Option<Response>, IoError>;
+pub type RpcSent = BoxFuture<(Client, RpcFinished), IoError>;
 
 impl Client {
     /// A constructor (a private one).
@@ -352,7 +352,7 @@ impl Client {
     /// once the message is sent. It yields the Client back (it is blocked for the time of sending)
     /// and another future that resolves once the answer is received (or once a timeout happens, in
     /// which case the result is None).
-    pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RPCSent {
+    pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RpcSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
         let data = self.data;
@@ -369,7 +369,7 @@ impl Client {
                 drop(rc_terminator);
                 r
             });
-        let completed: RPCFinished = match timeout {
+        let completed: RpcFinished = match timeout {
             Some(time) => {
                 // If we were provided with a timeout, select what happens first.
                 let timeout = match Timeout::new(time, &data.handle) {
@@ -456,7 +456,7 @@ impl Client {
 /// # use tokio_core::reactor::Core;
 /// # use tokio_core::net::TcpStream;
 /// # use tokio_core::io::Io;
-/// # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RPCError, Endpoint};
+/// # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
 /// # use tokio_jsonrpc::message::Response;
 /// # use futures::{Future, Stream};
 /// # use serde_json::Value;
@@ -487,22 +487,22 @@ impl Client {
 /// # }
 /// ```
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct Endpoint<Connection, RPCServer> {
+pub struct Endpoint<Connection, RpcServer> {
     connection: Connection,
-    server: RPCServer,
+    server: RpcServer,
     parallel: usize,
 }
 
-impl<Connection, RPCServer> Endpoint<Connection, RPCServer>
+impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     where Connection: Stream<Item = Parsed, Error = IoError>,
           Connection: Sink<SinkItem = Message, SinkError = IoError>,
           Connection: Send + 'static,
-          RPCServer: Server + 'static
+          RpcServer: Server + 'static
 {
     /// Create the endpoint builder.
     ///
     /// Pass it the connection to build the endpoint on and the server to use internally.
-    pub fn new(connection: Connection, server: RPCServer) -> Self {
+    pub fn new(connection: Connection, server: RpcServer) -> Self {
         Endpoint {
             connection: connection,
             server: server,

@@ -18,7 +18,7 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_core::io::Io;
 
-use tokio_jsonrpc::{LineCodec, Message, RPCError};
+use tokio_jsonrpc::{LineCodec, Message, RpcError};
 use tokio_jsonrpc::message::Notification;
 
 fn main() {
@@ -38,7 +38,7 @@ fn main() {
                     if req.method == "echo" {
                         Some(req.reply(json!([req.method, req.params])))
                     } else {
-                        Some(req.error(RPCError::method_not_found(req.method.clone())))
+                        Some(req.error(RpcError::method_not_found(req.method.clone())))
                     }
                 },
                 Ok(Message::Notification(Notification { ref method, .. })) => {

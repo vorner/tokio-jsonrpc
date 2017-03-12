@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{Value, to_value};
 
 use endpoint::ServerCtl;
-use message::RPCError;
+use message::RpcError;
 
 /// The server endpoint.
 ///
@@ -34,7 +34,7 @@ pub trait Server {
     ///
     /// Once the future resolves, the value or error is sent to the client as the reply. The reply
     /// is wrapped automatically.
-    type RPCCallResult: IntoFuture<Item = Self::Success, Error = RPCError> + 'static;
+    type RpcCallResult: IntoFuture<Item = Self::Success, Error = RpcError> + 'static;
     /// The result of the RPC call.
     ///
     /// As the client doesn't expect anything in return, both the success and error results are
@@ -49,7 +49,7 @@ pub trait Server {
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
     fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         None
     }
     /// Called when the client sends a notification.
@@ -79,7 +79,7 @@ pub struct Empty;
 
 impl Server for Empty {
     type Success = ();
-    type RPCCallResult = Result<(), RPCError>;
+    type RpcCallResult = Result<(), RpcError>;
     type NotificationResult = Result<(), ()>;
     fn initialized(&self, ctl: &ServerCtl) {
         ctl.terminate();
@@ -107,19 +107,19 @@ impl<S: Server> AbstractServer<S> {
 }
 
 /// A RPC call result wrapping trait objects.
-pub type BoxRPCCallResult = Box<Future<Item = Value, Error = RPCError>>;
+pub type BoxRpcCallResult = Box<Future<Item = Value, Error = RpcError>>;
 /// A notification call result wrapping trait objects.
 pub type BoxNotificationResult = Box<Future<Item = (), Error = ()>>;
 
 impl<S: Server> Server for AbstractServer<S> {
     type Success = Value;
-    type RPCCallResult = BoxRPCCallResult;
+    type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         self.0
             .rpc(ctl, method, params)
-            .map(|f| -> Box<Future<Item = Value, Error = RPCError>> {
+            .map(|f| -> Box<Future<Item = Value, Error = RpcError>> {
                 let future = f.into_future()
                     .map(|result| {
                         to_value(result)
@@ -146,7 +146,7 @@ impl<S: Server> Server for AbstractServer<S> {
 /// See also [`AbstractServer`](struct.AbstractServer.html) and
 /// [`ServerChain`](struct.ServerChain.html).
 pub type BoxServer = Box<Server<Success = Value,
-                                RPCCallResult = Box<Future<Item = Value, Error = RPCError>>,
+                                RpcCallResult = Box<Future<Item = Value, Error = RpcError>>,
                                 NotificationResult = Box<Future<Item = (), Error = ()>>>>;
 
 /// A server that chains several other servers.
@@ -185,10 +185,10 @@ impl ServerChain {
 
 impl Server for ServerChain {
     type Success = Value;
-    type RPCCallResult = BoxRPCCallResult;
+    type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         self.iter_chain(|sub| sub.rpc(ctl, method, params))
     }
     fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
@@ -242,10 +242,10 @@ mod tests {
 
     impl Server for LogServer {
         type Success = bool;
-        type RPCCallResult = Result<bool, RPCError>;
+        type RpcCallResult = Result<bool, RpcError>;
         type NotificationResult = Result<(), ()>;
         fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
-               -> Option<Self::RPCCallResult> {
+               -> Option<Self::RpcCallResult> {
             self.update(&self.rpc);
             match method {
                 "test" => {
@@ -304,10 +304,10 @@ mod tests {
 
     impl Server for AnotherServer {
         type Success = usize;
-        type RPCCallResult = Result<usize, RPCError>;
+        type RpcCallResult = Result<usize, RpcError>;
         type NotificationResult = Result<(), ()>;
         fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
-               -> Option<Self::RPCCallResult> {
+               -> Option<Self::RpcCallResult> {
             assert!(params.as_ref().unwrap().is_null());
             match method {
                 "another" => Some(Ok(42)),

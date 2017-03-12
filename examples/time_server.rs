@@ -27,7 +27,7 @@ use tokio_core::reactor::{Core, Handle, Interval};
 use tokio_core::net::TcpListener;
 use serde_json::{Value, from_value};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, RPCError, Server, ServerCtl};
+use tokio_jsonrpc::{Endpoint, LineCodec, RpcError, Server, ServerCtl};
 
 /// A helper struct to deserialize the parameters
 #[derive(Deserialize)]
@@ -55,12 +55,12 @@ impl Server for TimeServer {
     ///
     /// As we have two different RPCs with different results, we use the generic Value.
     type Success = Value;
-    type RPCCallResult = Result<Value, RPCError>;
+    type RpcCallResult = Result<Value, RpcError>;
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RPCCallResult> {
+           -> Option<Self::RpcCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
             "now" => Some(Ok(Value::Number(now().into()))),
@@ -68,18 +68,18 @@ impl Server for TimeServer {
             "subscribe" => {
                 // Some parsing and bailing out on errors
                 if params.is_none() {
-                    return Some(Err(RPCError::invalid_params()));
+                    return Some(Err(RpcError::invalid_params()));
                 }
                 let s_params = match from_value::<SubscribeParams>(params.clone().unwrap()) {
                     Ok(p) => p,
-                    Err(_) => return Some(Err(RPCError::invalid_params())),
+                    Err(_) => return Some(Err(RpcError::invalid_params())),
                 };
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
                 // Get a stream that „ticks“
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
-                    .or_else(|e| Err(RPCError::server_error(Some(format!("Interval: {}", e)))))
+                    .or_else(|e| Err(RpcError::server_error(Some(format!("Interval: {}", e)))))
                     .map(move |interval| {
                         // And send the notification on each tick (and pass the client through)
                         let notified = interval.fold(client, |client, _| {

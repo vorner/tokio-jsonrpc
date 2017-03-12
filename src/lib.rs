@@ -59,7 +59,7 @@
 //! # use tokio_core::reactor::Core;
 //! # use tokio_core::net::TcpListener;
 //! # use tokio_core::io::Io;
-//! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RPCError, Endpoint};
+//! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
 //! # use futures::{Stream};
 //! # use serde_json::Value;
 //! #
@@ -73,13 +73,13 @@
 //!
 //! impl Server for UselessServer {
 //!     type Success = String;
-//!     type RPCCallResult = Result<String, RPCError>;
+//!     type RpcCallResult = Result<String, RpcError>;
 //!     type NotificationResult = Result<(), ()>;
 //!     fn rpc(&self,
 //!            ctl: &ServerCtl,
 //!            method: &str,
 //!            _params: &Option<Value>)
-//!         -> Option<Self::RPCCallResult> {
+//!         -> Option<Self::RpcCallResult> {
 //!         match method {
 //!             // Accept a hello message and finish the greeting
 //!             "hello" => Some(Ok("world".to_owned())),
@@ -124,5 +124,5 @@ pub mod server;
 
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
 pub use endpoint::{Client, Endpoint, ServerCtl};
-pub use message::{Message, Parsed, RPCError};
+pub use message::{Message, Parsed, RpcError};
 pub use server::Server;
