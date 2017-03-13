@@ -173,7 +173,7 @@ impl ServerChain {
     }
     /// Iterate through the servers and return the first result that is `Some(_)`.
     fn iter_chain<R, F: Fn(&BoxServer) -> Option<R>>(&self, f: F) -> Option<R> {
-        for sub in self.0.iter() {
+        for sub in &self.0 {
             let result = f(sub);
             if result.is_some() {
                 return result;
@@ -196,7 +196,7 @@ impl Server for ServerChain {
         self.iter_chain(|sub| sub.notification(ctl, method, params))
     }
     fn initialized(&self, ctl: &ServerCtl) {
-        for sub in self.0.iter() {
+        for sub in &self.0 {
             sub.initialized(ctl);
         }
     }
