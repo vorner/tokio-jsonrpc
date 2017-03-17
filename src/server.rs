@@ -206,19 +206,35 @@ macro_rules! jsonrpc_params {
     // When the user asks for no params to be present. In that case we allow no params or null or
     // empty array or dictionary, for better compatibility. This is probably more benevolent than
     // the spec allows.
-    ( , $value:ident ) => {
+    ( , $value:expr ) => {
         match *$value {
             // Accept the empty values
             None |
-            Some(Value::Null) => (),
-            Some(Value::Array(ref arr)) if arr.len() == 0 => (),
-            Some(Value::Object(ref obj)) if obj.len() == 0 => (),
+            Some($crate::macro_exports::Value::Null) => (),
+            Some($crate::macro_exports::Value::Array(ref arr)) if arr.len() == 0 => (),
+            Some($crate::macro_exports::Value::Object(ref obj)) if obj.len() == 0 => (),
             // If it's anything else, complain
             _ => {
-                return Err(RpcError::invalid_params(Some("Expected no params".to_owned())));
+                return Err($crate::message::RpcError::
+                           invalid_params(Some("Expected no params".to_owned())));
             },
         }
     };
+    // An internal helper to decode a single variable and provide a Result instead of returning
+    // from the function.
+    ( single $varname:ident : $vartype:ty, $value:expr ) => {{
+        // Fix the type (in case someone passes &None or something)
+        let val: &Option<$crate::macro_exports::Value> = $value;
+        match *val {
+            None => Err(RpcError::invalid_params(Some("Expected a parameter".to_owned()))),
+            Some(ref value) => {
+                $crate::macro_exports::from_value::<$vartype>(value.clone()).map_err(|e| {
+                    $crate::message::RpcError::invalid_params(Some(format!("Incompatible type: {}",
+                                                                           e)))
+                })
+            },
+        }
+    }};
 }
 
 /*
@@ -448,6 +464,37 @@ mod tests {
         // object seems to be a big pain and probably isn't worth it here.
     }
 
+    /// A guard object that panics when dropped unless it has been disarmed first.
+    ///
+    /// We use it to check the macro we test didn't short-circuit the test by returning early.
+    struct PanicGuard(bool);
+
+    impl PanicGuard {
+        /// A constructor. Creates an armed guerd.
+        fn new() -> Self {
+            PanicGuard(true)
+        }
+        /// Disarm the guard → it won't panic when dropped.
+        fn disarm(&mut self) {
+            self.0 = false;
+        }
+    }
+
+    impl Drop for PanicGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                panic!("PanicGuard dropped without being disarmed");
+            }
+        }
+    }
+
+    /// Test the panic guard itself
+    #[test]
+    #[should_panic]
+    fn panic_guard() {
+        PanicGuard::new();
+    }
+
     /// Expect no params and return whanever we got from the macro.
     ///
     /// It is a separate function so the return error thing from the macro doesn't end the test
@@ -459,9 +506,10 @@ mod tests {
         Ok(())
     }
 
-    /// Test the jsonrpc_params macro when we expect no parameters
+    /// Test the jsonrpc_params macro when we expect no parameters.
     #[test]
     fn params_macro_none() {
+        let mut guard = PanicGuard::new();
         // These are legal no-params, at least for us
         expect_no_params(&None).unwrap();
         expect_no_params(&Some(Value::Null)).unwrap();
@@ -473,5 +521,22 @@ mod tests {
         expect_no_params(&Some(json!({"hello": 42}))).unwrap_err();
         expect_no_params(&Some(json!(42))).unwrap_err();
         expect_no_params(&Some(json!("hello"))).unwrap_err();
+        guard.disarm();
+    }
+
+    /// Test the single-param jsonrpc_params helper variant.
+    #[test]
+    fn single_param() {
+        let mut guard = PanicGuard::new();
+        // A valid conversion
+        // Make sure the return type fits
+        let result: Result<bool, RpcError> =
+            jsonrpc_params!(single param: bool, &Some(Value::Bool(true)));
+        assert!(result.unwrap());
+        // Some invalid conversions
+        jsonrpc_params!(single param: bool, &None).unwrap_err();
+        jsonrpc_params!(single param: bool, &Some(Value::Null)).unwrap_err();
+        jsonrpc_params!(single param: bool, &Some(Value::Array(Vec::new()))).unwrap_err();
+        guard.disarm();
     }
 }

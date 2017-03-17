@@ -126,6 +126,13 @@ pub mod endpoint;
 pub mod message;
 pub mod server;
 
+/// This contains some reexports so macros can find them.
+///
+/// It isn't for the direct use of the library consumer.
+pub mod macro_exports {
+    pub use serde_json::{Value, from_value};
+}
+
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
 pub use endpoint::{Client, Endpoint, ServerCtl};
 pub use message::{Message, Parsed, RpcError};
