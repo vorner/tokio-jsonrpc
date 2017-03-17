@@ -1,6 +1,11 @@
+* A macro `jsonrpc_params` to conveniently read and convert RPC call or
+  notification parameters to expected ones is provided. It also handles errors
+  about invalid parameters.
+* `RpcError::invalid_params` now takes optional error message.
+
 # 0.4.0:
 
-* Rename RPCError to RpcError (and similar), according to the style guide.
+* Rename `RPCError` to `RpcError` (and similar), according to the style guide.
 * Move the `Server` trait to its own module.
 * Provide some tools to compose servers (`AbstractServer`, `ServerChain`).
 

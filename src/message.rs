@@ -90,8 +90,8 @@ impl RpcError {
         }
     }
     /// Create an Invalid Param error.
-    pub fn invalid_params() -> Self {
-        RpcError::new(-32602, "Invalid params".to_owned(), None)
+    pub fn invalid_params(msg: Option<String>) -> Self {
+        RpcError::new(-32602, "Invalid params".to_owned(), msg.map(Value::String))
     }
     /// Create a server error.
     pub fn server_error<E: Serialize>(e: Option<E>) -> Self {

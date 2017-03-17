@@ -202,9 +202,104 @@ impl Server for ServerChain {
     }
 }
 
+macro_rules! jsonrpc_params {
+    // When the user asks for no params to be present. In that case we allow no params or null or
+    // empty array or dictionary, for better compatibility. This is probably more benevolent than
+    // the spec allows.
+    ( , $value:ident ) => {
+        match *$value {
+            // Accept the empty values
+            None |
+            Some(Value::Null) => (),
+            Some(Value::Array(ref arr)) if arr.len() == 0 => (),
+            Some(Value::Object(ref obj)) if obj.len() == 0 => (),
+            // If it's anything else, complain
+            _ => {
+                return Err(RpcError::invalid_params(Some("Expected no params".to_owned())));
+            },
+        }
+    };
+}
+
+/*
+ The intention:
+
+ let (x, y, z) = jsonrpc_params!(params, x: usize, y: String, z: Value);
+ Will convert them from {x: 42, y: "hello", true} or from [42, y, true]. Shall work for single
+ param and no params as well. Will return corresponding error if it happens.
+
+ jsonrpc_server! {
+    X {
+        rpcs {
+            hello(i: usize); // Will call x.hello(i), convert parameters, convert result…
+        }
+        notifications {
+            hi(x: String); // Will call x.hi(…)
+        }
+        init // Will call x.init
+    }
+ }
+
+
+   */
+
+/*
+trace_macros!(true);
+// TODO: We want to be able to accept arrays of different kinds of data, possibly alternatives…
+macro_rules! json_param {
+    ( (), $value:ident ) => { () };
+    ( $param:ty, $value:ident ) => {
+        match *$value {
+            None => unimplemented!(),
+            Some(ref v) => {
+                let result: Result<$param, _> = from_value(v.clone());
+                match result {
+                    Ok(r) => r,
+                    Err(_) => unimplemented!(),
+                }
+            },
+        }
+    }
+}
+macro_rules! json_rpc_impl {
+    ( $( $method:pat => ($param:ty) $code:block ),* ) => {
+        // TODO Use $crate for the types and absolute paths for Value
+        fn rpc(&self, ctl: &ServerCtl, method: &str, param: &Option<Value>) ->
+        Option<Self::RpcCallResult> {
+            match method {
+                $( $method => {
+                    let input = json_param!($param, param);
+                    let result = $code;
+                    let mapped = result.map(|r| to_value(r).expect("Error converting RPC result"));
+                    Some(Box::new(mapped.into_future()))
+                }, )*
+                _ => None,
+            }
+        }
+    };
+}
+
+    struct X;
+
+    impl Server for X {
+        type Success = Value;
+        type RpcCallResult = BoxRpcCallResult;
+        type NotificationResult = BoxNotificationResult;
+        json_rpc_impl!{
+            "test" => (usize) {
+                Ok(42)
+            },
+            "another" => (bool) {
+                Ok("Hello".to_owned())
+            }
+        }
+    }
+    */
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
+    use serde_json::Map;
 
     use super::*;
 
@@ -351,5 +446,32 @@ mod tests {
         assert!(chain.notification(&ctl, "another", &None).is_none());
         // It would be great to check what is logged inside the log server. But downcasting a trait
         // object seems to be a big pain and probably isn't worth it here.
+    }
+
+    /// Expect no params and return whanever we got from the macro.
+    ///
+    /// It is a separate function so the return error thing from the macro doesn't end the test
+    /// prematurely (actually, it wouldn't, as the return type doesn't match).
+    fn expect_no_params(params: &Option<Value>) -> Result<(), RpcError> {
+        // Check that we can actually assign it somewhere (this may be needed in other macros later
+        // on.
+        let () = jsonrpc_params!(, params);
+        Ok(())
+    }
+
+    /// Test the jsonrpc_params macro when we expect no parameters
+    #[test]
+    fn params_macro_none() {
+        // These are legal no-params, at least for us
+        expect_no_params(&None).unwrap();
+        expect_no_params(&Some(Value::Null)).unwrap();
+        expect_no_params(&Some(Value::Array(Vec::new()))).unwrap();
+        expect_no_params(&Some(Value::Object(Map::new()))).unwrap();
+        // Some illegal values
+        expect_no_params(&Some(Value::Bool(true))).unwrap_err();
+        expect_no_params(&Some(json!([42, "hello"]))).unwrap_err();
+        expect_no_params(&Some(json!({"hello": 42}))).unwrap_err();
+        expect_no_params(&Some(json!(42))).unwrap_err();
+        expect_no_params(&Some(json!("hello"))).unwrap_err();
     }
 }

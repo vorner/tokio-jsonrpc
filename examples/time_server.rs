@@ -68,11 +68,11 @@ impl Server for TimeServer {
             "subscribe" => {
                 // Some parsing and bailing out on errors
                 if params.is_none() {
-                    return Some(Err(RpcError::invalid_params()));
+                    return Some(Err(RpcError::invalid_params(None)));
                 }
                 let s_params = match from_value::<SubscribeParams>(params.clone().unwrap()) {
                     Ok(p) => p,
-                    Err(_) => return Some(Err(RpcError::invalid_params())),
+                    Err(_) => return Some(Err(RpcError::invalid_params(None))),
                 };
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
