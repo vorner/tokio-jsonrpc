@@ -270,7 +270,34 @@ macro_rules! jsonrpc_params {
             },
             Some(_) => {
                 return Err($crate::message::RpcError::
-                           invalid_params(Some("Expected an array as parameters".to_owned())))
+                           invalid_params(Some("Expected an array as parameters".to_owned())));
+            },
+        }
+    }};
+    // Decode named arguments.
+    // It can handle optional arguments in a way, but it has its limits (eg. a non-optional string
+    // defaults to an empty one if it is missing).
+    ( $value:expr, named $( $varname:ident : $vartype:ty ),+ ) => {{
+        let val: &Option<$crate::macro_exports::Value> = $value;
+        match *val {
+            None => return Err($crate::message::RpcError::
+                               invalid_params(Some("Expected parameters".to_owned()))),
+            Some(Value::Object(ref map)) => {
+                (
+                    $(
+                        {
+                            // Yes, stupid borrow checker… can't we get a global constant that
+                            // never gets dropped?
+                            let null = Value::Null;
+                            let subval = map.get(stringify!($varname)).unwrap_or(&null);
+                            jsonrpc_params!(subval, single $varname: $vartype)?
+                        },
+                    )+
+                )
+            },
+            Some(_) => {
+                return Err($crate::message::RpcError::
+                           invalid_params(Some("Expected an object as parameters".to_owned())));
             },
         }
     }};
@@ -508,6 +535,9 @@ mod tests {
     /// We use it to check the macro we test didn't short-circuit the test by returning early. Note
     /// that it causes a double panic if the test fails (in that case you want to temporarily
     /// remove the panic guard from that test).
+    ///
+    /// Most of the following tests don't need it, as they call the macro indirectly, by wrapping
+    /// it into a function (and such function can't return in the caller).
     struct PanicGuard(bool);
 
     impl PanicGuard {
@@ -550,7 +580,6 @@ mod tests {
     /// Test the jsonrpc_params macro when we expect no parameters.
     #[test]
     fn params_macro_none() {
-        let mut guard = PanicGuard::new();
         // These are legal no-params, at least for us
         expect_no_params(&None).unwrap();
         expect_no_params(&Some(Value::Null)).unwrap();
@@ -562,7 +591,6 @@ mod tests {
         expect_no_params(&Some(json!({"hello": 42}))).unwrap_err();
         expect_no_params(&Some(json!(42))).unwrap_err();
         expect_no_params(&Some(json!("hello"))).unwrap_err();
-        guard.disarm();
     }
 
     /// Test the single-param jsonrpc_params helper variant.
@@ -580,15 +608,15 @@ mod tests {
         guard.disarm();
     }
 
-    /// Helper function to decode two values as positional arguments
+    /// A helper function to decode two values as positional arguments.
     ///
-    /// This is to prevent attemtp to return errors from within the test function.
+    /// This is to prevent attempt to return errors from within the test function.
     fn bool_str_positional(value: &Option<Value>) -> Result<(bool, String), RpcError> {
         let (b, s) = jsonrpc_params!(value, positional b: bool, s: String);
         Ok((b, s))
     }
 
-    /// Like above, but with only a single variable
+    /// Like above, but with only a single variable.
     ///
     /// As single-values are handled slightly differently at a syntax level (eg, a tuple with only
     /// one element needs a terminating comma) and also differently in the macro (they are
@@ -600,10 +628,9 @@ mod tests {
         Ok(r)
     }
 
-    /// Test decoding positional arguments
+    /// Test decoding positional arguments.
     #[test]
     fn positional() {
-        let mut guard = PanicGuard::new();
         // Some that don't match
         bool_str_positional(&None).unwrap_err();
         bool_str_positional(&Some(Value::Null)).unwrap_err();
@@ -613,7 +640,8 @@ mod tests {
         bool_str_positional(&Some(json!([true, "hello", false]))).unwrap_err();
         bool_str_positional(&Some(json!([true, true]))).unwrap_err();
         // This one should be fine
-        bool_str_positional(&Some(json!([true, "hello"]))).unwrap();
+        assert_eq!((true, "hello".to_owned()),
+                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap());
 
         single_positional(&None).unwrap_err();
         // We need two nested arrays
@@ -621,6 +649,55 @@ mod tests {
         assert!(single_positional(&Some(json!([[]]))).unwrap().is_empty());
         assert_eq!(vec!["hello", "world"],
                    single_positional(&Some(json!([["hello", "world"]]))).unwrap());
-        guard.disarm();
+    }
+
+    /// Helper function to decode two values as named arguments
+    fn bool_str_named(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+        let (b, s) = jsonrpc_params!(value, named b: bool, s: String);
+        Ok((b, s))
+    }
+
+    #[derive(Deserialize, Debug, Eq, PartialEq)]
+    struct TestStruct {
+        x: i32,
+    }
+
+    /// Like above, but with only one parameter.
+    fn single_named(value: &Option<Value>) -> Result<TestStruct, RpcError> {
+        let (ts,) = jsonrpc_params!(value, named ts: TestStruct);
+        Ok(ts)
+    }
+
+    /// Test an optional value might be missing.
+    fn optional_named(value: &Option<Value>) -> Result<Option<u32>, RpcError> {
+        let (ov,) = jsonrpc_params!(value, named ov: Option<u32>);
+        Ok(ov)
+    }
+
+    /// Test decoding named arguments
+    #[test]
+    fn named() {
+        bool_str_named(&None).unwrap_err();
+        bool_str_named(&Some(Value::Null)).unwrap_err();
+        bool_str_named(&Some(Value::Bool(true))).unwrap_err();
+        bool_str_named(&Some(json!([true, "hello"]))).unwrap_err();
+        bool_str_named(&Some(json!({"b": true, "s": 42}))).unwrap_err();
+        // FIXME: This fails, as serde_json considers Value::Null to be an empty string
+        //bool_str_named(&Some(json!({"b": true}))).unwrap_err();
+        bool_str_named(&Some(json!({"s": "hello"}))).unwrap_err();
+        assert_eq!((true, "hello".to_owned()),
+                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap());
+        // FIXME: We currently don't know how to check against extra params
+        assert_eq!((true, "hello".to_owned()),
+                   bool_str_named(&Some(json!({"b": true, "s": "hello", "x": 42}))).unwrap());
+
+        single_named(&None).unwrap_err();
+        single_named(&Some(json!({"ts": 42}))).unwrap_err();
+        single_named(&Some(json!({"ts": {"x": 42}}))).unwrap();
+
+        optional_named(&None).unwrap_err();
+        optional_named(&Some(json!([]))).unwrap_err();
+        assert_eq!(Some(42), optional_named(&Some(json!({"ov": 42}))).unwrap());
+        assert_eq!(None, optional_named(&Some(json!({}))).unwrap());
     }
 }
