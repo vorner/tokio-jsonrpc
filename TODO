@@ -9,3 +9,4 @@
 • Documentation for the jsonrpc_params macro, with some examples
 • An external test to check the macro works with all fancy things like renaming of stuff and not having certain imports.
 • Document panics around returning un-jsonizable types
+• Try to make the types less complex ‒ this is reportedly the reason for very long compile times ‒ placing Boxes in the middle of the chain *might* help.
