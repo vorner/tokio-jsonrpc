@@ -25,9 +25,3 @@ serde_json = "0.9"
 uuid = { version = "0.4", features = ["v4"] }
 
 [lib]
-
-[profile.dev]
-codegen-units = 4
-
-[profile.test]
-codegen-units = 4
