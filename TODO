@@ -8,3 +8,4 @@
 • BoundaryCodec can now be implemented, serde-json now provides error details
 • Documentation for the jsonrpc_params macro, with some examples
 • An external test to check the macro works with all fancy things like renaming of stuff and not having certain imports.
+• Document panics around returning un-jsonizable types

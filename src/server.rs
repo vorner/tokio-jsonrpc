@@ -206,7 +206,7 @@ macro_rules! jsonrpc_params {
     // When the user asks for no params to be present. In that case we allow no params or null or
     // empty array or dictionary, for better compatibility. This is probably more benevolent than
     // the spec allows.
-    ( , $value:expr ) => {
+    ( $value:expr, ) => {
         match *$value {
             // Accept the empty values
             None |
@@ -222,16 +222,55 @@ macro_rules! jsonrpc_params {
     };
     // An internal helper to decode a single variable and provide a Result instead of returning
     // from the function.
-    ( single $varname:ident : $vartype:ty, $value:expr ) => {{
-        // Fix the type (in case someone passes &None or something)
+    ( $value:expr, single $varname:ident : $vartype:ty ) => {{
+        // Fix the type
+        let val: &$crate::macro_exports::Value = $value;
+        $crate::macro_exports::from_value::<$vartype>(val.clone()).map_err(|e| {
+            $crate::message::RpcError::invalid_params(Some(format!("Incompatible type: {}", e)))
+        })
+    }};
+    // A helper to count number of arguments
+    ( arity $head:ident ) => { 1 };
+    ( arity $head:ident, $( $tail:ident ),* ) => { 1 + jsonrpc_params!(arity $( $tail ),*) };
+    // A helper to recurse on decoding of positional arguments
+    ( $spl:expr, accum ( $( $result:tt )* ), positional_decode $vname:ident : $vtype:ty ) => {
+        ( $( $result )*
+            {
+                let spl: &[$crate::macro_exports::Value] = $spl;
+                jsonrpc_params!(&spl[0], single $vname: $vtype)?
+            },
+        )
+    };
+    ( $spl:expr, accum ( $( $result:tt )* ),
+      positional_decode $hname:ident : $htype:ty, $( $tname:ident : $ttype:ty ),+ ) => {{
+        let spl: &[$crate::macro_exports::Value] = $spl;
+        jsonrpc_params!(&spl[1..], accum (
+            $( $result )*
+            {
+                jsonrpc_params!(&spl[0], single $hname: $htype)?
+            },
+        ), positional_decode $( $tname: $ttype ),+ )
+    }};
+    // Possibly multiple arguments, enforcing positional coding (in an array)
+    // It uses recursion to count and access the items in the vector
+    ( $value:expr, positional $( $varname:ident : $vartype:ty ),+ ) => {{
         let val: &Option<$crate::macro_exports::Value> = $value;
         match *val {
-            None => Err(RpcError::invalid_params(Some("Expected a parameter".to_owned()))),
-            Some(ref value) => {
-                $crate::macro_exports::from_value::<$vartype>(value.clone()).map_err(|e| {
-                    $crate::message::RpcError::invalid_params(Some(format!("Incompatible type: {}",
-                                                                           e)))
-                })
+            None => return Err($crate::message::RpcError::
+                               invalid_params(Some("Expected parameters".to_owned()))),
+            Some(Value::Array(ref vec)) => {
+                let cnt = jsonrpc_params!(arity $( $varname ),+);
+                if cnt != vec.len() {
+                    let err = format!("Wrong number of parameters: expected: {}, got: {}", cnt,
+                                      vec.len());
+                    return Err($crate::message::RpcError::invalid_params(Some(err)));
+                }
+                let spl: &[$crate::macro_exports::Value] = &vec[..];
+                jsonrpc_params!(spl, accum (), positional_decode $( $varname: $vartype ),+)
+            },
+            Some(_) => {
+                return Err($crate::message::RpcError::
+                           invalid_params(Some("Expected an array as parameters".to_owned())))
             },
         }
     }};
@@ -466,7 +505,9 @@ mod tests {
 
     /// A guard object that panics when dropped unless it has been disarmed first.
     ///
-    /// We use it to check the macro we test didn't short-circuit the test by returning early.
+    /// We use it to check the macro we test didn't short-circuit the test by returning early. Note
+    /// that it causes a double panic if the test fails (in that case you want to temporarily
+    /// remove the panic guard from that test).
     struct PanicGuard(bool);
 
     impl PanicGuard {
@@ -502,7 +543,7 @@ mod tests {
     fn expect_no_params(params: &Option<Value>) -> Result<(), RpcError> {
         // Check that we can actually assign it somewhere (this may be needed in other macros later
         // on.
-        let () = jsonrpc_params!(, params);
+        let () = jsonrpc_params!(params, );
         Ok(())
     }
 
@@ -531,12 +572,55 @@ mod tests {
         // A valid conversion
         // Make sure the return type fits
         let result: Result<bool, RpcError> =
-            jsonrpc_params!(single param: bool, &Some(Value::Bool(true)));
+            jsonrpc_params!(&Value::Bool(true), single param: bool);
         assert!(result.unwrap());
         // Some invalid conversions
-        jsonrpc_params!(single param: bool, &None).unwrap_err();
-        jsonrpc_params!(single param: bool, &Some(Value::Null)).unwrap_err();
-        jsonrpc_params!(single param: bool, &Some(Value::Array(Vec::new()))).unwrap_err();
+        jsonrpc_params!(&Value::Null, single param: bool).unwrap_err();
+        jsonrpc_params!(&Value::Array(Vec::new()), single param: bool).unwrap_err();
+        guard.disarm();
+    }
+
+    /// Helper function to decode two values as positional arguments
+    ///
+    /// This is to prevent attemtp to return errors from within the test function.
+    fn bool_str_positional(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+        let (b, s) = jsonrpc_params!(value, positional b: bool, s: String);
+        Ok((b, s))
+    }
+
+    /// Like above, but with only a single variable
+    ///
+    /// As single-values are handled slightly differently at a syntax level (eg, a tuple with only
+    /// one element needs a terminating comma) and also differently in the macro (they are
+    /// sometimes the ends of recursion), we mostly want to check it compiles.
+    ///
+    /// It also checks we don't get confused with an array inside the parameter array.
+    fn single_positional(value: &Option<Value>) -> Result<Vec<String>, RpcError> {
+        let (r,) = jsonrpc_params!(value, positional arr: Vec<String>);
+        Ok(r)
+    }
+
+    /// Test decoding positional arguments
+    #[test]
+    fn positional() {
+        let mut guard = PanicGuard::new();
+        // Some that don't match
+        bool_str_positional(&None).unwrap_err();
+        bool_str_positional(&Some(Value::Null)).unwrap_err();
+        bool_str_positional(&Some(Value::Bool(true))).unwrap_err();
+        bool_str_positional(&Some(json!({"b": true, "s": "hello"}))).unwrap_err();
+        bool_str_positional(&Some(json!([true]))).unwrap_err();
+        bool_str_positional(&Some(json!([true, "hello", false]))).unwrap_err();
+        bool_str_positional(&Some(json!([true, true]))).unwrap_err();
+        // This one should be fine
+        bool_str_positional(&Some(json!([true, "hello"]))).unwrap();
+
+        single_positional(&None).unwrap_err();
+        // We need two nested arrays
+        single_positional(&Some(json!(["Hello"]))).unwrap_err();
+        assert!(single_positional(&Some(json!([[]]))).unwrap().is_empty());
+        assert_eq!(vec!["hello", "world"],
+                   single_positional(&Some(json!([["hello", "world"]]))).unwrap());
         guard.disarm();
     }
 }
