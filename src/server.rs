@@ -301,6 +301,24 @@ macro_rules! jsonrpc_params {
             },
         }
     }};
+    // Decode params, decide if named or positional based on what arrived
+    ( $value:expr, decide $( $varname:ident : $vartype:ty ),+ ) => {{
+        let val: &Option<$crate::macro_exports::Value> = $value;
+        match *val {
+            None => return Err($crate::message::RpcError::
+                               invalid_params(Some("Expected parameters".to_owned()))),
+            Some(Value::Array(_)) => jsonrpc_params!(val, positional $( $varname: $vartype ),+),
+            Some(Value::Object(_)) => jsonrpc_params!(val, named $( $varname: $vartype ),+),
+            Some(_) => {
+                return Err($crate::message::RpcError::
+                           invalid_params(Some("Expected an object or an array as parameters"
+                                               .to_owned())))
+            },
+        }
+    }};
+    ( $value:expr, $( $varname:ident : $vartype:ty ),+ ) => {
+        jsonrpc_params!($value, decide $( $varname: $vartype ),+)
+    };
 }
 
 /*
@@ -699,5 +717,25 @@ mod tests {
         optional_named(&Some(json!([]))).unwrap_err();
         assert_eq!(Some(42), optional_named(&Some(json!({"ov": 42}))).unwrap());
         assert_eq!(None, optional_named(&Some(json!({}))).unwrap());
+    }
+
+    /// A helper function to decode two parameters.
+    ///
+    /// The decoding decides how to do so based on what arrived.
+    fn bool_str(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+        let (b, s) = jsonrpc_params!(value, b: bool, s: String);
+        Ok((b, s))
+    }
+
+    /// Test decoding parameters when it decides itself how.
+    #[test]
+    fn decide() {
+        bool_str(&None).unwrap_err();
+        bool_str(&Some(Value::Null)).unwrap_err();
+        bool_str(&Some(Value::Bool(true))).unwrap_err();
+        assert_eq!((true, "hello".to_owned()),
+                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap());
+        assert_eq!((true, "hello".to_owned()),
+                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap());
     }
 }
