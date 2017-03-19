@@ -316,6 +316,21 @@ macro_rules! jsonrpc_params {
             },
         }
     }};
+    // A special case for a single param.
+    //
+    // We allow decoding it directly, mostly to support users with a complex all-params structure.
+    ( $value:expr, $varname: ident: $vartype: ty ) => {{
+        let val: &Option<$crate::macro_exports::Value> = $value;
+        // First try decoding directly
+        let single = val.as_ref().map(|val| jsonrpc_params!(val, single $varname: $vartype));
+        if let Some(Ok(result)) = single {
+            (result,)
+        } else {
+            // If direct single decoding didn't work, try the usual multi-param way.
+            jsonrpc_params!(val, decide $varname: $vartype)
+        }
+    }};
+    // Propagate multiple params.
     ( $value:expr, $( $varname:ident : $vartype:ty ),+ ) => {
         jsonrpc_params!($value, decide $( $varname: $vartype ),+)
     };
@@ -323,10 +338,6 @@ macro_rules! jsonrpc_params {
 
 /*
  The intention:
-
- let (x, y, z) = jsonrpc_params!(params, x: usize, y: String, z: Value);
- Will convert them from {x: 42, y: "hello", true} or from [42, y, true]. Shall work for single
- param and no params as well. Will return corresponding error if it happens.
 
  jsonrpc_server! {
     X {
@@ -737,5 +748,31 @@ mod tests {
                    bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap());
         assert_eq!((true, "hello".to_owned()),
                    bool_str_positional(&Some(json!([true, "hello"]))).unwrap());
+    }
+
+    /// A helper for the `decide_single` test.
+    fn decode_test_struct(value: &Option<Value>) -> Result<TestStruct, RpcError> {
+        let (ts,) = jsonrpc_params!(value, ts: TestStruct);
+        Ok(ts)
+    }
+
+    /// Similar to `decide`, but with a single parameter.
+    ///
+    /// The single parameter is special, since it can decode the parameters structure directly.
+    /// This is to support the user having an all-encompassing parameter struct (possibly with all
+    /// optional/default/renaming tweaks done through fine-tuning serde).
+    #[test]
+    fn decide_single() {
+        decode_test_struct(&None).unwrap_err();
+        decode_test_struct(&Some(Value::Null)).unwrap_err();
+        decode_test_struct(&Some(Value::Bool(true))).unwrap_err();
+
+        // Encoded as an array
+        assert_eq!(TestStruct { x: 42 }, decode_test_struct(&Some(json!([{"x": 42}]))).unwrap());
+        // Encoded as an object
+        assert_eq!(TestStruct { x: 42 },
+                   decode_test_struct(&Some(json!({"ts": {"x": 42}}))).unwrap());
+        // Encoded directly as the parameters structure
+        assert_eq!(TestStruct { x: 42 }, decode_test_struct(&Some(json!({"x": 42}))).unwrap());
     }
 }
