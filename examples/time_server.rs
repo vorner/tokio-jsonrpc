@@ -11,6 +11,7 @@
 //! unix timestamp (number of seconds since 1.1. 1970). You cal also subscribe to periodic time
 //! updates.
 
+#[macro_use]
 extern crate tokio_jsonrpc;
 extern crate tokio_core;
 #[macro_use]
@@ -67,13 +68,7 @@ impl Server for TimeServer {
             // Subscribe to receiving updates of time (we don't do unsubscription)
             "subscribe" => {
                 // Some parsing and bailing out on errors
-                if params.is_none() {
-                    return Some(Err(RpcError::invalid_params(None)));
-                }
-                let s_params = match from_value::<SubscribeParams>(params.clone().unwrap()) {
-                    Ok(p) => p,
-                    Err(_) => return Some(Err(RpcError::invalid_params(None))),
-                };
+                let (s_params,) = jsonrpc_params!(params, s_params: SubscribeParams);
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();

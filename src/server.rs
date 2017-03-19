@@ -43,22 +43,26 @@ pub trait Server {
     type NotificationResult: IntoFuture<Item = (), Error = ()> + 'static;
     /// Called when the client requests something.
     ///
-    /// This is a callback from the [endpoint](struct.Endpoint.html) when the client requests
-    /// something. If the method is unknown, it shall return `None`. This allows composition of
-    /// servers.
+    /// This is a callback from the [endpoint](../endpoint/struct.Endpoint.html) when the client
+    /// requests something. If the method is unknown, it shall return `None`. This allows
+    /// composition of servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
+    /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
+    /// regard.
     fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
            -> Option<Self::RpcCallResult> {
         None
     }
     /// Called when the client sends a notification.
     ///
-    /// This is a callback from the [endpoint](struct.Endpoint.html) when the client requests
-    /// something. If the method is unknown, it shall return `None`. This allows composition of
-    /// servers.
+    /// This is a callback from the [endpoint](../endpoint/struct.Endpoint.html) when the client
+    /// requests something. If the method is unknown, it shall return `None`. This allows
+    /// composition of servers.
     ///
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
+    /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
+    /// regard.
     fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
                     -> Option<Self::NotificationResult> {
         None
@@ -72,9 +76,10 @@ pub trait Server {
 
 /// A RPC server that knows no methods.
 ///
-/// You can use this if you want to have a client-only [Endpoint](struct.Endpoint.html). It simply
-/// terminates the server part right away. Or, more conveniently, use `Endpoint`'s
-/// [`client_only`](struct.Endpoint.html#method.client_only) method.
+/// You can use this if you want to have a client-only
+/// [Endpoint](../endpoint/struct.Endpoint.html). It simply terminates the server part right away.
+/// Or, more conveniently, use `Endpoint`'s
+/// [`client_only`](../endpoint/struct.Endpoint.html#method.client_only) method.
 pub struct Empty;
 
 impl Server for Empty {
@@ -202,6 +207,129 @@ impl Server for ServerChain {
     }
 }
 
+// TODO: Maybe we want to return a result instead every time? The Some and stuff handling is
+// annoying.
+/// Parses the parameters of an RPC or a notification.
+///
+/// The [`Server`](server/trait.Server.html) receives `&Option<Value>` as the parameters when its
+/// `notification` or `rpc` method is called and it needs to handle it. This means checking for
+/// validity and converting it to appropriate types. This is tedious.
+///
+/// This macro helps with that. In it's basic usage, you pass the received parameters and parameter
+/// definitions for what you want and receive a tuple of converted ones. In case the parameters are
+/// invalid, it returns early with an `Some(IntoFuture<_, Error = RpcError>)` directly from your
+/// function (which is the return type of the callbacks).
+///
+/// By default, it accepts both parameters passed by a name (inside a JSON object) or by position
+/// (inside an array). If you insist your clients must use named or positional parameters, prefix
+/// the parameter definitions by `named` or `positional` respectively.
+///
+/// This also handles optional arguments in the `named` case (and when auto-detecting and a JSON
+/// object is provided).
+///
+/// If an empty parameter definition is provided, the macro checks that no parameters were sent
+/// (accepts no parameters sent, `null` sent as parameters and an empty object or array).
+///
+/// If a single parameter is passed, in addition to trying positional and named parameters, the
+/// macro tries to convert the whole `Value` into the given type. This allows you to ask for
+/// a structure that holds all the named parameters.
+///
+/// If you want to force the single parameter conversion of the whole `Value`, you can use the
+/// macro as `jsonrpc_params!(params, single name: Type)`. However, in this case it returns
+/// `Result<Type, RpcError>` ‒ since it is expected you might want to try both named and
+/// positional decoding yourself. Also, it expects `&Value`, not `&Option<Value>`.
+///
+/// The macro has other variants than the mentioned here. They are mostly used internally by the
+/// macro itself and aren't meant to be used directly.
+///
+/// # Examples
+///
+/// Basic usage, parse an integer and a boolean:
+///
+/// ```rust
+/// # #[macro_use] extern crate tokio_jsonrpc;
+/// # #[macro_use] extern crate serde_json;
+/// # use tokio_jsonrpc::message::RpcError;
+/// # use serde_json::Value;
+/// fn parse(params: &Option<Value>) -> Option<Result<(i32, bool), RpcError>> {
+///     Some(Ok(jsonrpc_params!(params, num: i32, b: bool)))
+/// }
+///
+/// # fn main() {
+/// assert_eq!((42, true), parse(&Some(json!([42, true]))).unwrap().unwrap());
+/// assert_eq!((42, true), parse(&Some(json!({"num": 42, "b": true}))).unwrap().unwrap());
+/// parse(&None).unwrap().unwrap_err();
+/// parse(&Some(json!({"num": "hello", "b": false}))).unwrap().unwrap_err();
+/// # }
+/// ```
+///
+/// Usage with enforcing named parameters. Also, the integer is optional. Enforcing positional
+/// works in a similar way, with the `positional` token.
+///
+/// ```rust
+/// # #[macro_use] extern crate tokio_jsonrpc;
+/// # #[macro_use] extern crate serde_json;
+/// # use tokio_jsonrpc::message::RpcError;
+/// # use serde_json::Value;
+/// fn parse(params: &Option<Value>) -> Option<Result<(Option<i32>, bool), RpcError>> {
+///     Some(Ok(jsonrpc_params!(params, named num: Option<i32>, b: bool)))
+/// }
+///
+/// # fn main() {
+/// parse(&Some(json!([42, true]))).unwrap().unwrap_err();
+/// assert_eq!((Some(42), true), parse(&Some(json!({"num": 42, "b": true}))).unwrap().unwrap());
+/// assert_eq!((None, false),
+///            parse(&Some(json!({"b": false, "extra": "ignored"}))).unwrap().unwrap());
+/// parse(&None).unwrap().unwrap_err();
+/// parse(&Some(json!({"num": "hello", "b": false}))).unwrap().unwrap_err();
+/// # }
+/// ```
+///
+/// Decoding into a structure works like this:
+///
+/// ```rust
+/// # #[macro_use] extern crate tokio_jsonrpc;
+/// # #[macro_use] extern crate serde_json;
+/// # #[macro_use] extern crate serde_derive;
+/// # use tokio_jsonrpc::message::RpcError;
+/// # use serde_json::Value;
+///
+/// #[derive(PartialEq, Debug, Deserialize)]
+/// struct Params {
+///     num: Option<i32>,
+///     b: bool,
+/// }
+///
+/// fn parse(params: &Option<Value>) -> Option<Result<Params, RpcError>> {
+///     let (params,) = jsonrpc_params!(params, params: Params);
+///     Some(Ok(params))
+/// }
+///
+/// # fn main() {
+/// let expected = Params {
+///     num: Some(42),
+///     b: true,
+/// };
+/// let expected_optional = Params {
+///     num: None,
+///     b: false,
+/// };
+///
+/// assert_eq!(expected, parse(&Some(json!([42, true]))).unwrap().unwrap());
+/// assert_eq!(expected, parse(&Some(json!({"num": 42, "b": true}))).unwrap().unwrap());
+/// assert_eq!(expected_optional, parse(&Some(json!({"b": false}))).unwrap().unwrap());
+/// // This is accepted mostly as a side effect.
+/// assert_eq!(expected, parse(&Some(json!([{"num": 42, "b": true}]))).unwrap().unwrap());
+/// // As is this.
+/// assert_eq!(expected, parse(&Some(json!({"params": {"num": 42, "b": true}}))).unwrap().unwrap());
+/// // If you mind the above limitations, you can ask directly for a single value decoding.
+/// // That returs a Result directly.
+/// assert_eq!(expected,
+///            jsonrpc_params!(&json!({"num": 42, "b": true}), single params: Params).unwrap());
+/// jsonrpc_params!(&json!([{"num": 42, "b": true}]), single params: Params).unwrap_err();
+/// # }
+/// ```
+#[macro_export]
 macro_rules! jsonrpc_params {
     // When the user asks for no params to be present. In that case we allow no params or null or
     // empty array or dictionary, for better compatibility. This is probably more benevolent than
@@ -215,11 +343,13 @@ macro_rules! jsonrpc_params {
             Some($crate::macro_exports::Value::Object(ref obj)) if obj.len() == 0 => (),
             // If it's anything else, complain
             _ => {
-                return Err($crate::message::RpcError::
-                           invalid_params(Some("Expected no params".to_owned())));
+                return Some(Err($crate::message::RpcError::
+                                invalid_params(Some("Expected no params".to_owned()))).into());
             },
         }
     };
+    // A convenience conversion
+    ( $value:expr ) => { jsonrpc_params!($value,) };
     // An internal helper to decode a single variable and provide a Result instead of returning
     // from the function.
     ( $value:expr, single $varname:ident : $vartype:ty ) => {{
@@ -237,7 +367,10 @@ macro_rules! jsonrpc_params {
         ( $( $result )*
             {
                 let spl: &[$crate::macro_exports::Value] = $spl;
-                jsonrpc_params!(&spl[0], single $vname: $vtype)?
+                match jsonrpc_params!(&spl[0], single $vname: $vtype) {
+                    Ok(result) => result,
+                    Err(e) => return Some(Err(e)),
+                }
             },
         )
     };
@@ -247,7 +380,10 @@ macro_rules! jsonrpc_params {
         jsonrpc_params!(&spl[1..], accum (
             $( $result )*
             {
-                jsonrpc_params!(&spl[0], single $hname: $htype)?
+                match jsonrpc_params!(&spl[0], single $hname: $htype) {
+                    Ok(result) => result,
+                    Err(e) => return Some(Err(e)),
+                }
             },
         ), positional_decode $( $tname: $ttype ),+ )
     }};
@@ -256,21 +392,22 @@ macro_rules! jsonrpc_params {
     ( $value:expr, positional $( $varname:ident : $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
-            None => return Err($crate::message::RpcError::
-                               invalid_params(Some("Expected parameters".to_owned()))),
+            None => return Some(Err($crate::message::RpcError::
+                                    invalid_params(Some("Expected parameters".to_owned()))).into()),
             Some($crate::macro_exports::Value::Array(ref vec)) => {
                 let cnt = jsonrpc_params!(arity $( $varname ),+);
                 if cnt != vec.len() {
                     let err = format!("Wrong number of parameters: expected: {}, got: {}", cnt,
                                       vec.len());
-                    return Err($crate::message::RpcError::invalid_params(Some(err)));
+                    return Some(Err($crate::message::RpcError::invalid_params(Some(err))).into());
                 }
                 let spl: &[$crate::macro_exports::Value] = &vec[..];
                 jsonrpc_params!(spl, accum (), positional_decode $( $varname: $vartype ),+)
             },
             Some(_) => {
-                return Err($crate::message::RpcError::
-                           invalid_params(Some("Expected an array as parameters".to_owned())));
+                return Some(Err($crate::message::RpcError::
+                                invalid_params(Some("Expected an array as parameters".to_owned())))
+                            .into());
             },
         }
     }};
@@ -280,8 +417,8 @@ macro_rules! jsonrpc_params {
     ( $value:expr, named $( $varname:ident : $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
-            None => return Err($crate::message::RpcError::
-                               invalid_params(Some("Expected parameters".to_owned()))),
+            None => return Some(Err($crate::message::RpcError::
+                                    invalid_params(Some("Expected parameters".to_owned()))).into()),
             Some($crate::macro_exports::Value::Object(ref map)) => {
                 (
                     $(
@@ -290,14 +427,18 @@ macro_rules! jsonrpc_params {
                             // never gets dropped?
                             let null = $crate::macro_exports::Value::Null;
                             let subval = map.get(stringify!($varname)).unwrap_or(&null);
-                            jsonrpc_params!(subval, single $varname: $vartype)?
+                            match jsonrpc_params!(subval, single $varname: $vartype) {
+                                Ok(result) => result,
+                                Err(e) => return Some(Err(e)),
+                            }
                         },
                     )+
                 )
             },
             Some(_) => {
-                return Err($crate::message::RpcError::
-                           invalid_params(Some("Expected an object as parameters".to_owned())));
+                return Some(Err($crate::message::RpcError::
+                                invalid_params(Some("Expected an object as parameters".to_owned())))
+                            .into());
             },
         }
     }};
@@ -305,8 +446,8 @@ macro_rules! jsonrpc_params {
     ( $value:expr, decide $( $varname:ident : $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
-            None => return Err($crate::message::RpcError::
-                               invalid_params(Some("Expected parameters".to_owned()))),
+            None => return Some(Err($crate::message::RpcError::
+                                    invalid_params(Some("Expected parameters".to_owned()))).into()),
             Some($crate::macro_exports::Value::Array(_)) => {
                 jsonrpc_params!(val, positional $( $varname: $vartype ),+)
             },
@@ -314,9 +455,9 @@ macro_rules! jsonrpc_params {
                 jsonrpc_params!(val, named $( $varname: $vartype ),+)
             },
             Some(_) => {
-                return Err($crate::message::RpcError::
-                           invalid_params(Some("Expected an object or an array as parameters"
-                                               .to_owned())))
+                return Some(Err($crate::message::RpcError::
+                                invalid_params(Some("Expected an object or an array as parameters"
+                                                    .to_owned()))).into());
             },
         }
     }};
@@ -603,27 +744,27 @@ mod tests {
     ///
     /// It is a separate function so the return error thing from the macro doesn't end the test
     /// prematurely (actually, it wouldn't, as the return type doesn't match).
-    fn expect_no_params(params: &Option<Value>) -> Result<(), RpcError> {
+    fn expect_no_params(params: &Option<Value>) -> Option<Result<(), RpcError>> {
         // Check that we can actually assign it somewhere (this may be needed in other macros later
         // on.
         let () = jsonrpc_params!(params, );
-        Ok(())
+        Some(Ok(()))
     }
 
     /// Test the jsonrpc_params macro when we expect no parameters.
     #[test]
     fn params_macro_none() {
         // These are legal no-params, at least for us
-        expect_no_params(&None).unwrap();
-        expect_no_params(&Some(Value::Null)).unwrap();
-        expect_no_params(&Some(Value::Array(Vec::new()))).unwrap();
-        expect_no_params(&Some(Value::Object(Map::new()))).unwrap();
+        expect_no_params(&None).unwrap().unwrap();
+        expect_no_params(&Some(Value::Null)).unwrap().unwrap();
+        expect_no_params(&Some(Value::Array(Vec::new()))).unwrap().unwrap();
+        expect_no_params(&Some(Value::Object(Map::new()))).unwrap().unwrap();
         // Some illegal values
-        expect_no_params(&Some(Value::Bool(true))).unwrap_err();
-        expect_no_params(&Some(json!([42, "hello"]))).unwrap_err();
-        expect_no_params(&Some(json!({"hello": 42}))).unwrap_err();
-        expect_no_params(&Some(json!(42))).unwrap_err();
-        expect_no_params(&Some(json!("hello"))).unwrap_err();
+        expect_no_params(&Some(Value::Bool(true))).unwrap().unwrap_err();
+        expect_no_params(&Some(json!([42, "hello"]))).unwrap().unwrap_err();
+        expect_no_params(&Some(json!({"hello": 42}))).unwrap().unwrap_err();
+        expect_no_params(&Some(json!(42))).unwrap().unwrap_err();
+        expect_no_params(&Some(json!("hello"))).unwrap().unwrap_err();
     }
 
     /// Test the single-param jsonrpc_params helper variant.
@@ -644,9 +785,9 @@ mod tests {
     /// A helper function to decode two values as positional arguments.
     ///
     /// This is to prevent attempt to return errors from within the test function.
-    fn bool_str_positional(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+    fn bool_str_positional(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
         let (b, s) = jsonrpc_params!(value, positional b: bool, s: String);
-        Ok((b, s))
+        Some(Ok((b, s)))
     }
 
     /// Like above, but with only a single variable.
@@ -656,38 +797,38 @@ mod tests {
     /// sometimes the ends of recursion), we mostly want to check it compiles.
     ///
     /// It also checks we don't get confused with an array inside the parameter array.
-    fn single_positional(value: &Option<Value>) -> Result<Vec<String>, RpcError> {
+    fn single_positional(value: &Option<Value>) -> Option<Result<Vec<String>, RpcError>> {
         let (r,) = jsonrpc_params!(value, positional arr: Vec<String>);
-        Ok(r)
+        Some(Ok(r))
     }
 
     /// Test decoding positional arguments.
     #[test]
     fn positional() {
         // Some that don't match
-        bool_str_positional(&None).unwrap_err();
-        bool_str_positional(&Some(Value::Null)).unwrap_err();
-        bool_str_positional(&Some(Value::Bool(true))).unwrap_err();
-        bool_str_positional(&Some(json!({"b": true, "s": "hello"}))).unwrap_err();
-        bool_str_positional(&Some(json!([true]))).unwrap_err();
-        bool_str_positional(&Some(json!([true, "hello", false]))).unwrap_err();
-        bool_str_positional(&Some(json!([true, true]))).unwrap_err();
+        bool_str_positional(&None).unwrap().unwrap_err();
+        bool_str_positional(&Some(Value::Null)).unwrap().unwrap_err();
+        bool_str_positional(&Some(Value::Bool(true))).unwrap().unwrap_err();
+        bool_str_positional(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap_err();
+        bool_str_positional(&Some(json!([true]))).unwrap().unwrap_err();
+        bool_str_positional(&Some(json!([true, "hello", false]))).unwrap().unwrap_err();
+        bool_str_positional(&Some(json!([true, true]))).unwrap().unwrap_err();
         // This one should be fine
         assert_eq!((true, "hello".to_owned()),
-                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap());
+                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
 
-        single_positional(&None).unwrap_err();
+        single_positional(&None).unwrap().unwrap_err();
         // We need two nested arrays
-        single_positional(&Some(json!(["Hello"]))).unwrap_err();
-        assert!(single_positional(&Some(json!([[]]))).unwrap().is_empty());
+        single_positional(&Some(json!(["Hello"]))).unwrap().unwrap_err();
+        assert!(single_positional(&Some(json!([[]]))).unwrap().unwrap().is_empty());
         assert_eq!(vec!["hello", "world"],
-                   single_positional(&Some(json!([["hello", "world"]]))).unwrap());
+                   single_positional(&Some(json!([["hello", "world"]]))).unwrap().unwrap());
     }
 
     /// Helper function to decode two values as named arguments
-    fn bool_str_named(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+    fn bool_str_named(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
         let (b, s) = jsonrpc_params!(value, named b: bool, s: String);
-        Ok((b, s))
+        Some(Ok((b, s)))
     }
 
     #[derive(Deserialize, Debug, Eq, PartialEq)]
@@ -696,68 +837,70 @@ mod tests {
     }
 
     /// Like above, but with only one parameter.
-    fn single_named(value: &Option<Value>) -> Result<TestStruct, RpcError> {
+    fn single_named(value: &Option<Value>) -> Option<Result<TestStruct, RpcError>> {
         let (ts,) = jsonrpc_params!(value, named ts: TestStruct);
-        Ok(ts)
+        Some(Ok(ts))
     }
 
     /// Test an optional value might be missing.
-    fn optional_named(value: &Option<Value>) -> Result<Option<u32>, RpcError> {
+    fn optional_named(value: &Option<Value>) -> Option<Result<Option<u32>, RpcError>> {
         let (ov,) = jsonrpc_params!(value, named ov: Option<u32>);
-        Ok(ov)
+        Some(Ok(ov))
     }
 
     /// Test decoding named arguments
     #[test]
     fn named() {
-        bool_str_named(&None).unwrap_err();
-        bool_str_named(&Some(Value::Null)).unwrap_err();
-        bool_str_named(&Some(Value::Bool(true))).unwrap_err();
-        bool_str_named(&Some(json!([true, "hello"]))).unwrap_err();
-        bool_str_named(&Some(json!({"b": true, "s": 42}))).unwrap_err();
+        bool_str_named(&None).unwrap().unwrap_err();
+        bool_str_named(&Some(Value::Null)).unwrap().unwrap_err();
+        bool_str_named(&Some(Value::Bool(true))).unwrap().unwrap_err();
+        bool_str_named(&Some(json!([true, "hello"]))).unwrap().unwrap_err();
+        bool_str_named(&Some(json!({"b": true, "s": 42}))).unwrap().unwrap_err();
         // FIXME: This fails, as serde_json considers Value::Null to be an empty string
         //bool_str_named(&Some(json!({"b": true}))).unwrap_err();
-        bool_str_named(&Some(json!({"s": "hello"}))).unwrap_err();
+        bool_str_named(&Some(json!({"s": "hello"}))).unwrap().unwrap_err();
         assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap());
+                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap());
         // FIXME: We currently don't know how to check against extra params
         assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello", "x": 42}))).unwrap());
+                   bool_str_named(&Some(json!({"b": true, "s": "hello", "x": 42})))
+                       .unwrap()
+                       .unwrap());
 
-        single_named(&None).unwrap_err();
-        single_named(&Some(json!({"ts": 42}))).unwrap_err();
-        single_named(&Some(json!({"ts": {"x": 42}}))).unwrap();
+        single_named(&None).unwrap().unwrap_err();
+        single_named(&Some(json!({"ts": 42}))).unwrap().unwrap_err();
+        single_named(&Some(json!({"ts": {"x": 42}}))).unwrap().unwrap();
 
-        optional_named(&None).unwrap_err();
-        optional_named(&Some(json!([]))).unwrap_err();
-        assert_eq!(Some(42), optional_named(&Some(json!({"ov": 42}))).unwrap());
-        assert_eq!(None, optional_named(&Some(json!({}))).unwrap());
+        optional_named(&None).unwrap().unwrap_err();
+        optional_named(&Some(json!([]))).unwrap().unwrap_err();
+        assert_eq!(Some(42), optional_named(&Some(json!({"ov": 42}))).unwrap().unwrap());
+        assert_eq!(None, optional_named(&Some(json!({}))).unwrap().unwrap());
     }
 
     /// A helper function to decode two parameters.
     ///
     /// The decoding decides how to do so based on what arrived.
-    fn bool_str(value: &Option<Value>) -> Result<(bool, String), RpcError> {
+    fn bool_str(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
         let (b, s) = jsonrpc_params!(value, b: bool, s: String);
-        Ok((b, s))
+        Some(Ok((b, s)))
     }
 
     /// Test decoding parameters when it decides itself how.
     #[test]
     fn decide() {
-        bool_str(&None).unwrap_err();
-        bool_str(&Some(Value::Null)).unwrap_err();
-        bool_str(&Some(Value::Bool(true))).unwrap_err();
+        bool_str(&None).unwrap().unwrap_err();
+        bool_str(&Some(Value::Null)).unwrap().unwrap_err();
+        bool_str(&Some(Value::Bool(true))).unwrap().unwrap_err();
         assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap());
+                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap());
         assert_eq!((true, "hello".to_owned()),
-                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap());
+                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
     }
 
     /// A helper for the `decide_single` test.
-    fn decode_test_struct(value: &Option<Value>) -> Result<TestStruct, RpcError> {
+    fn decode_test_struct(value: &Option<Value>) -> Option<Result<TestStruct, RpcError>> {
         let (ts,) = jsonrpc_params!(value, ts: TestStruct);
-        Ok(ts)
+        Some(Ok(ts))
     }
 
     /// Similar to `decide`, but with a single parameter.
@@ -767,16 +910,18 @@ mod tests {
     /// optional/default/renaming tweaks done through fine-tuning serde).
     #[test]
     fn decide_single() {
-        decode_test_struct(&None).unwrap_err();
-        decode_test_struct(&Some(Value::Null)).unwrap_err();
-        decode_test_struct(&Some(Value::Bool(true))).unwrap_err();
+        decode_test_struct(&None).unwrap().unwrap_err();
+        decode_test_struct(&Some(Value::Null)).unwrap().unwrap_err();
+        decode_test_struct(&Some(Value::Bool(true))).unwrap().unwrap_err();
 
         // Encoded as an array
-        assert_eq!(TestStruct { x: 42 }, decode_test_struct(&Some(json!([{"x": 42}]))).unwrap());
+        assert_eq!(TestStruct { x: 42 },
+                   decode_test_struct(&Some(json!([{"x": 42}]))).unwrap().unwrap());
         // Encoded as an object
         assert_eq!(TestStruct { x: 42 },
-                   decode_test_struct(&Some(json!({"ts": {"x": 42}}))).unwrap());
+                   decode_test_struct(&Some(json!({"ts": {"x": 42}}))).unwrap().unwrap());
         // Encoded directly as the parameters structure
-        assert_eq!(TestStruct { x: 42 }, decode_test_struct(&Some(json!({"x": 42}))).unwrap());
+        assert_eq!(TestStruct { x: 42 },
+                   decode_test_struct(&Some(json!({"x": 42}))).unwrap().unwrap());
     }
 }
