@@ -131,6 +131,7 @@ pub mod server;
 /// It isn't for the direct use of the library consumer.
 pub mod macro_exports {
     pub use serde_json::{Value, from_value};
+    pub use std::option::Option;
 }
 
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};

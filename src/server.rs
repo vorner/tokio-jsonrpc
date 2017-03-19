@@ -254,11 +254,11 @@ macro_rules! jsonrpc_params {
     // Possibly multiple arguments, enforcing positional coding (in an array)
     // It uses recursion to count and access the items in the vector
     ( $value:expr, positional $( $varname:ident : $vartype:ty ),+ ) => {{
-        let val: &Option<$crate::macro_exports::Value> = $value;
+        let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Err($crate::message::RpcError::
                                invalid_params(Some("Expected parameters".to_owned()))),
-            Some(Value::Array(ref vec)) => {
+            Some($crate::macro_exports::Value::Array(ref vec)) => {
                 let cnt = jsonrpc_params!(arity $( $varname ),+);
                 if cnt != vec.len() {
                     let err = format!("Wrong number of parameters: expected: {}, got: {}", cnt,
@@ -278,17 +278,17 @@ macro_rules! jsonrpc_params {
     // It can handle optional arguments in a way, but it has its limits (eg. a non-optional string
     // defaults to an empty one if it is missing).
     ( $value:expr, named $( $varname:ident : $vartype:ty ),+ ) => {{
-        let val: &Option<$crate::macro_exports::Value> = $value;
+        let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Err($crate::message::RpcError::
                                invalid_params(Some("Expected parameters".to_owned()))),
-            Some(Value::Object(ref map)) => {
+            Some($crate::macro_exports::Value::Object(ref map)) => {
                 (
                     $(
                         {
                             // Yes, stupid borrow checker… can't we get a global constant that
                             // never gets dropped?
-                            let null = Value::Null;
+                            let null = $crate::macro_exports::Value::Null;
                             let subval = map.get(stringify!($varname)).unwrap_or(&null);
                             jsonrpc_params!(subval, single $varname: $vartype)?
                         },
@@ -303,12 +303,16 @@ macro_rules! jsonrpc_params {
     }};
     // Decode params, decide if named or positional based on what arrived
     ( $value:expr, decide $( $varname:ident : $vartype:ty ),+ ) => {{
-        let val: &Option<$crate::macro_exports::Value> = $value;
+        let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Err($crate::message::RpcError::
                                invalid_params(Some("Expected parameters".to_owned()))),
-            Some(Value::Array(_)) => jsonrpc_params!(val, positional $( $varname: $vartype ),+),
-            Some(Value::Object(_)) => jsonrpc_params!(val, named $( $varname: $vartype ),+),
+            Some($crate::macro_exports::Value::Array(_)) => {
+                jsonrpc_params!(val, positional $( $varname: $vartype ),+)
+            },
+            Some($crate::macro_exports::Value::Object(_)) => {
+                jsonrpc_params!(val, named $( $varname: $vartype ),+)
+            },
             Some(_) => {
                 return Err($crate::message::RpcError::
                            invalid_params(Some("Expected an object or an array as parameters"
@@ -320,7 +324,7 @@ macro_rules! jsonrpc_params {
     //
     // We allow decoding it directly, mostly to support users with a complex all-params structure.
     ( $value:expr, $varname: ident: $vartype: ty ) => {{
-        let val: &Option<$crate::macro_exports::Value> = $value;
+        let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         // First try decoding directly
         let single = val.as_ref().map(|val| jsonrpc_params!(val, single $varname: $vartype));
         if let Some(Ok(result)) = single {
