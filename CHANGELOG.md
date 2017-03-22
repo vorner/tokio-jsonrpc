@@ -1,3 +1,5 @@
+# 0.5.0
+
 * A macro `jsonrpc_params` to conveniently read and convert RPC call or
   notification parameters to expected ones is provided. It also handles errors
   about invalid parameters.
