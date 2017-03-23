@@ -26,6 +26,7 @@ use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{Sender, channel};
 use relay::{Receiver as RelayReceiver, Sender as RelaySender, channel as relay_channel};
 use serde_json::{Value, to_value};
+use slog::{Discard, Logger};
 use tokio_core::reactor::{Core, Handle, Timeout};
 
 use message::{Broken, Message, Notification, Parsed, Request, Response, RpcError};
@@ -203,7 +204,7 @@ fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
 fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
-                                         msg: Vec<Message>)
+                                         logger: &Logger, msg: Vec<Message>)
                                          -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
     // future gets its turn, so shorter one could lead to a deadlock.
@@ -226,7 +227,7 @@ fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, id
             // Also, it is a bit unfortunate how we need to allocate so many times here. We may try
             // doing something about that in the future, but without implementing custom future and
             // stream types, this seems the best we can do.
-            let all_sent = do_msg(server, ctl, idmap, Ok(sub))
+            let all_sent = do_msg(server, ctl, idmap, logger, Ok(sub))
                 .and_then(move |future_message| -> Result<FutureMessage, _> {
                     let sender = sender.clone();
                     let msg_sent =
@@ -259,28 +260,31 @@ fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, id
     Box::new(subs_stream.chain(streamed))
 }
 
-fn do_response(idmap: &IDMap, response: Response) -> FutureMessageStream {
+fn do_response(idmap: &IDMap, logger: &Logger, response: Response) -> FutureMessageStream {
     let maybe_sender = response.id
         .as_str()
         .and_then(|id| idmap.borrow_mut().remove(id));
     if let Some(sender) = maybe_sender {
+        trace!(logger, "id" => format!("{:?}", response.id); "Received an RPC response");
         sender.complete(response);
+    } else {
+        error!(logger, "id" => format!("{:?}", response.id); "Unexpected RPC response");
     }
-    // TODO: Else ‒ some logging
     Box::new(empty())
 }
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
 fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
-                                       msg: Parsed)
+                                       logger: &Logger, msg: Parsed)
                                        -> FutureMessageStream {
     let terminated = ctl.0
         .borrow()
         .stop;
+    trace!(logger, "terminated" => terminated, "message" => format!("{:?}", msg); "Do a message");
     if terminated {
         if let Ok(Message::Response(response)) = msg {
-            do_response(idmap, response);
+            do_response(idmap, logger, response);
         }
         Box::new(empty())
     } else {
@@ -293,11 +297,11 @@ fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idma
             Ok(Message::Notification(notif)) => {
                 Box::new(once(do_notification(server, ctl, &notif)))
             },
-            Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, batch),
+            Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, logger, batch),
             Ok(Message::UnmatchedSub(value)) => {
-                do_msg(server, ctl, idmap, Err(Broken::Unmatched(value)))
+                do_msg(server, ctl, idmap, logger, Err(Broken::Unmatched(value)))
             },
-            Ok(Message::Response(response)) => do_response(idmap, response),
+            Ok(Message::Response(response)) => do_response(idmap, logger, response),
         }
     }
 }
@@ -486,11 +490,12 @@ impl Client {
 /// core.run(request).unwrap();
 /// # }
 /// ```
-#[derive(Clone, Debug, PartialEq, Hash)]
+#[derive(Clone, Debug)]
 pub struct Endpoint<Connection, RpcServer> {
     connection: Connection,
     server: RpcServer,
     parallel: usize,
+    logger: Logger,
 }
 
 impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
@@ -507,6 +512,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
             connection: connection,
             server: server,
             parallel: 1,
+            logger: Logger::root(Discard, o!()),
         }
     }
     /// Set how many RPCs may be process in parallel.
@@ -516,6 +522,14 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     /// parallel futures there may be at one time on this particular endpoint.
     pub fn parallel(self, parallel: usize) -> Self {
         Endpoint { parallel: parallel, ..self }
+    }
+    /// Sets the logger used by the endpoint.
+    ///
+    /// By default, nothing is logged anywhere. But if you specify a logger, it'll be used for
+    /// logging various messages. The logger is used verbatim ‒ if you want the endpoint to use a
+    /// child logger, inherit it on your side.
+    pub fn logger(self, logger: Logger) -> Self {
+        Endpoint { logger: logger, ..self }
     }
     /// Start the endpoint.
     ///
@@ -529,6 +543,8 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
     // TODO: Should we return a better error/return the error once thing resolves?
     pub fn start(self, handle: &Handle) -> (Client, Box<Future<Item = (), Error = IoError>>) {
+        debug!(self.logger, "parallel" => self.parallel; "Starting endpoint");
+        let logger = self.logger;
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
         let (sender, receiver) = channel(32);
@@ -558,21 +574,26 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let server = self.server;
         server.initialized(&ctl);
         let idmap_cloned = idmap.clone();
+        let logger_cloned = logger.clone();
         // A stream that contains no elements, but cleans the idmap once called (to kill the RPC
         // futures)
         let cleaner = unfold((), move |_| -> Option<Result<_, _>> {
-            idmap_cloned.borrow_mut().clear();
+            let mut idmap = idmap_cloned.borrow_mut();
+            debug!(logger_cloned, "outstanding" => idmap.len(); "Dropping unanswered RPCs");
+            idmap.clear();
             None
         });
         let idmap_cloned = idmap.clone();
+        let logger_cloned = logger.clone();
         let answers = stream.map(Some)
             .chain(cleaner)
             .select(terminator)
             .take_while(|m| Ok(m.is_some()))
-            .map(move |parsed| do_msg(&server, &ctl, &idmap, parsed.unwrap()))
+            .map(move |parsed| do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap()))
             .flatten()
             .buffer_unordered(self.parallel)
             .filter_map(|message| message);
+        let logger_cloned = logger.clone();
         // Take both the client RPCs and the answers
         let outbound = answers.select(receiver.map_err(shouldnt_happen));
         let (error_sender, error_receiver) = relay_channel::<Option<IoError>>();
@@ -583,13 +604,18 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
             .then(move |result| {
                 // This will hopefully kill the RPC futures
                 // We kill on both ends, because we may kill the connection or the other side may.
-                idmap_cloned.borrow_mut().clear();
+                let mut idmap = idmap_cloned.borrow_mut();
+                debug!(logger_cloned, "outstanding" => idmap.len(); "Dropping unanswered RPCs");
+                idmap.clear();
                 match result {
                     Ok(_) => {
+                        debug!(logger_cloned, "Outbount stream ended successfully");
                         error_sender.complete(None);
                         Ok(())
                     },
                     Err((e, _select_next)) => {
+                        debug!(logger_cloned, "error" => format!("{}", e);
+                               "Outbount stream ended with an error");
                         error_sender.complete(Some(e));
                         Err(())
                     },
@@ -602,6 +628,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                           None => Ok(()),
                           Some(e) => Err(e),
                       });
+        debug!(logger, "Started endpoint");
         (client, Box::new(finished_errors))
     }
 }

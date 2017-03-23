@@ -1,3 +1,5 @@
+* Logging support (a lot of things now takes a `Logger`).
+
 # 0.5.0
 
 * A macro `jsonrpc_params` to conveniently read and convert RPC call or

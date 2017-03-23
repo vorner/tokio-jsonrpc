@@ -120,6 +120,8 @@ extern crate tokio_core;
 extern crate futures;
 extern crate futures_mpsc;
 extern crate relay;
+#[macro_use]
+extern crate slog;
 
 pub mod codec;
 pub mod endpoint;
