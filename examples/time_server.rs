@@ -8,7 +8,7 @@
 //! A server that responds with the current time
 //!
 //! A server listening on localhost:2345. It reponds to the „now“ method, returning the current
-//! unix timestamp (number of seconds since 1.1. 1970). You cal also subscribe to periodic time
+//! unix timestamp (number of seconds since 1.1. 1970). You can also subscribe to periodic time
 //! updates.
 
 #[macro_use]
@@ -19,14 +19,20 @@ extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
 extern crate futures;
+#[macro_use]
+extern crate slog;
+extern crate slog_term;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::io;
 
 use futures::{Future, Stream};
 use tokio_core::io::Io;
 use tokio_core::reactor::{Core, Handle, Interval};
 use tokio_core::net::TcpListener;
-use serde_json::{Value, from_value};
+use serde_json::Value;
+use slog::{Drain, Logger};
+use slog_term::{FullFormat, PlainSyncDecorator};
 
 use tokio_jsonrpc::{Endpoint, LineCodec, RpcError, Server, ServerCtl};
 
@@ -49,7 +55,7 @@ fn now() -> u64 {
 /// The server implementation
 ///
 /// Future versions of the library will have some helpers to create them in an easier way.
-struct TimeServer(Handle);
+struct TimeServer(Handle, Logger);
 
 impl Server for TimeServer {
     /// The return type of RPC
@@ -64,27 +70,36 @@ impl Server for TimeServer {
            -> Option<Self::RpcCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
-            "now" => Some(Ok(Value::Number(now().into()))),
+            "now" => {
+                debug!(self.1, "Providing time");
+                Some(Ok(Value::Number(now().into())))
+            },
             // Subscribe to receiving updates of time (we don't do unsubscription)
             "subscribe" => {
+                debug!(self.1, "Subscribing");
                 // Some parsing and bailing out on errors
                 let (s_params,) = jsonrpc_params!(params, s_params: SubscribeParams);
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
+                let logger = self.1.clone();
                 // Get a stream that „ticks“
                 let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
                     .or_else(|e| Err(RpcError::server_error(Some(format!("Interval: {}", e)))))
                     .map(move |interval| {
+                        let logger_cloned = logger.clone();
                         // And send the notification on each tick (and pass the client through)
-                        let notified = interval.fold(client, |client, _| {
+                        let notified = interval.fold(client, move |client, _| {
+                                debug!(logger_cloned, "Tick");
                                 client.notify("time".to_owned(), Some(json!([now()])))
                             })
                             // So it can be spawned, spawn needs ().
                             .map(|_| ())
                             // TODO: This reports a „Shouldn't happen“ error ‒ do something
                             // about that
-                            .map_err(|e| println!("Error notifying: {}", e));
+                            .map_err(move |e| {
+                                         error!(logger, "Error notifying about a time: {}", e);
+                                     });
                         handle.spawn(notified);
                         // We need some result, but we don't send any meaningful value
                         Value::Null
@@ -98,6 +113,11 @@ impl Server for TimeServer {
 }
 
 fn main() {
+    // An application logger
+    let plain = PlainSyncDecorator::new(io::stdout());
+    let drain = FullFormat::new(plain).build().fuse();
+    let logger = Logger::root(drain, o!("app" => "Time server example"));
+    info!(logger, "Starting up");
     // Usual setup of async server
     let mut core = Core::new().unwrap();
     let handle = core.handle();
@@ -105,13 +125,18 @@ fn main() {
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
     let service = listener.incoming()
         .for_each(move |(connection, addr)| {
+            let addr = format!("{}", addr);
             // Once a connection is made, create an endpoint on it, using the above server
             let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()),
-                                                    TimeServer(handle.clone()))
+                                                    TimeServer(handle.clone(),
+                                                               logger.new(o!("cli" => addr.clone(),
+                                                                             "context" => "time"))))
+                    .logger(logger.new(o!("cli" => addr.clone(), "context" => "json RPC")))
                     .start(&handle);
             // If it finishes with an error, report it
+            let logger = logger.clone();
             let err_report =
-                finished.map_err(move |e| println!("Problem on client {}: {}", addr, e));
+                finished.map_err(move |e| error!(logger, "Problem on client {}: {}", addr, e));
             handle.spawn(err_report);
             // Just so the for_each is happy, nobody actually uses this
             Ok(())
