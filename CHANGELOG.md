@@ -1,4 +1,6 @@
-* Logging support (a lot of things now takes a `Logger`).
+# 0.5.1
+
+* Logging support (the endpoint now can be fed with a logger).
 
 # 0.5.0
 
