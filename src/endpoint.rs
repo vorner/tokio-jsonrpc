@@ -162,6 +162,22 @@ type BoxStream<T, E> = Box<Stream<Item = T, Error = E>>;
 // None in error means end the stream, please
 type FutureMessageStream = BoxStream<FutureMessage, IoError>;
 
+/// Box the stream as a trait object in test.
+///
+/// Due to the compiler bug #38528, the compilation takes a long time with complex types ‒ like
+/// long chains of future modifiers. So we turn some of them into trait objects and split the
+/// chain. It should be removed once the bug is fixed. Also, it does nothing on release build.
+#[cfg(debug_assertions)]
+fn test_boxed<T, E, S>(s: S) -> Box<Stream<Item = T, Error = E>>
+    where S: Stream<Item = T, Error = E> + 'static
+{
+    Box::new(s)
+}
+#[cfg(not(debug_assertions))]
+fn test_boxed<S>(s: S) -> S {
+    s
+}
+
 type IDMap = Rc<RefCell<HashMap<String, RelaySender<Response>>>>;
 
 // A future::stream::once that takes only the success value, for convenience.
@@ -201,12 +217,12 @@ fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
                                       -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => {
-            trace!(logger, "Server refused notification {}");
+            trace!(logger, "Server refused notification {}", notification.method);
             Box::new(Ok(None).into_future())
         },
         // We ignore both success and error, so we convert it into something for now
         Some(future) => {
-            trace!(logger, "Server accepted notification {}");
+            trace!(logger, "Server accepted notification {}", notification.method);
             Box::new(future.into_future().then(|_| Ok(None)))
         },
     }
@@ -619,11 +635,17 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let answers = stream.map(Some)
             .chain(cleaner)
             .select(terminator)
-            .take_while(|m| Ok(m.is_some()))
-            .map(move |parsed| do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap()))
+            .take_while(|m| Ok(m.is_some()));
+        // A trick to split the long chain of modifiers to speed up compilation ‒ see the comment
+        // at test_boxed
+        let answers = test_boxed(answers);
+        let answers = answers.map(move |parsed| {
+                do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap())
+            })
             .flatten()
             .buffer_unordered(self.parallel)
             .filter_map(|message| message);
+        let answers = test_boxed(answers);
         let logger_cloned = logger.clone();
         // Take both the client RPCs and the answers
         let outbound = answers.select(receiver.map_err(shouldnt_happen));

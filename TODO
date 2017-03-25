@@ -6,4 +6,3 @@
 • Go through the documentation and use third form everywhere (eg. „returns“ instead of „return“)
 • BoundaryCodec can now be implemented, serde-json now provides error details
 • Document panics around returning un-jsonizable types
-• Try to make the types less complex ‒ this is reportedly the reason for very long compile times ‒ placing Boxes in the middle of the chain *might* help.
