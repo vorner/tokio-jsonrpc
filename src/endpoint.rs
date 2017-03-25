@@ -62,6 +62,7 @@ struct ServerCtlInternal {
     idmap: IDMap,
     handle: Handle,
     sender: Option<Sender<Message>>,
+    logger: Logger,
 }
 
 /// A handle to control the server.
@@ -78,6 +79,7 @@ impl ServerCtl {
     /// And perform some operation on the internal (access for convenience)
     fn cleanup<R, F: FnOnce(&mut ServerCtlInternal) -> R>(&self, f: F) -> R {
         let mut internal = self.0.borrow_mut();
+        debug!(internal.logger, "Server cleanup");
         internal.stop = true;
         internal.sender.take();
         f(&mut internal)
@@ -121,7 +123,8 @@ impl ServerCtl {
                         .expect("`client` called after termination`"),
                     internal.sender
                         .as_ref()
-                        .expect("`client` called after termination"))
+                        .expect("`client` called after termination"),
+                    internal.logger.clone())
     }
     // This one is for unit tests, not part of the general-purpose API. It creates a dummpy
     // ServerCtl that does nothing, but still can be passed to the Server for checking.
@@ -146,6 +149,7 @@ impl ServerCtl {
                                                      idmap: Default::default(),
                                                      handle: handle,
                                                      sender: Some(msg_sender),
+                                                     logger: Logger::root(Discard, o!()),
                                                  })));
         (ctl, drop_receiver, kill_receiver)
     }
@@ -169,14 +173,17 @@ fn shouldnt_happen<E>(_: E) -> IoError {
     IoError::new(ErrorKind::Other, "Shouldn't happen")
 }
 
-fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, request: Request)
+fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, request: Request,
+                                           logger: &Logger)
                                            -> FutureMessage {
     match server.rpc(ctl, &request.method, &request.params) {
         None => {
+            trace!(logger, "Server refused RPC {}", request.method);
             let reply = request.error(RpcError::method_not_found(request.method.clone()));
             Box::new(Ok(Some(reply)).into_future())
         },
         Some(future) => {
+            trace!(logger, "Server accepted RPC {}", request.method);
             let result = future.into_future()
                 .then(move |result| match result {
                           Err(err) => Ok(Some(request.error(err))),
@@ -190,12 +197,18 @@ fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, 
 }
 
 fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
-                                      notification: &Notification)
+                                      notification: &Notification, logger: &Logger)
                                       -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
-        None => Box::new(Ok(None).into_future()),
+        None => {
+            trace!(logger, "Server refused notification {}");
+            Box::new(Ok(None).into_future())
+        },
         // We ignore both success and error, so we convert it into something for now
-        Some(future) => Box::new(future.into_future().then(|_| Ok(None))),
+        Some(future) => {
+            trace!(logger, "Server accepted notification {}");
+            Box::new(future.into_future().then(|_| Ok(None)))
+        },
     }
 }
 
@@ -293,9 +306,9 @@ fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idma
                 let err: FutureMessage = Ok(Some(broken.reply())).into_future().boxed();
                 Box::new(once(err))
             },
-            Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req))),
+            Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req, logger))),
             Ok(Message::Notification(notif)) => {
-                Box::new(once(do_notification(server, ctl, &notif)))
+                Box::new(once(do_notification(server, ctl, &notif, logger)))
             },
             Ok(Message::Batch(batch)) => do_batch(server, ctl, idmap, logger, batch),
             Ok(Message::UnmatchedSub(value)) => {
@@ -319,6 +332,7 @@ struct ClientData {
     handle: Handle,
     /// Keep the connection alive as long as the client is alive.
     terminator: RcDrop,
+    logger: Logger,
 }
 
 /// The client part of the endpoint.
@@ -338,8 +352,9 @@ pub type RpcSent = BoxFuture<(Client, RpcFinished), IoError>;
 impl Client {
     /// A constructor (a private one).
     fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop,
-           sender: &Sender<Message>)
+           sender: &Sender<Message>, logger: Logger)
            -> Self {
+        debug!(logger, "Creating a new client");
         Client {
             sender: sender.clone(),
             data: ClientData {
@@ -347,6 +362,7 @@ impl Client {
                 ctl: ctl.clone(),
                 handle: handle.clone(),
                 terminator: terminator.clone(),
+                logger: logger,
             },
         }
     }
@@ -360,6 +376,7 @@ impl Client {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
         let data = self.data;
+        trace!(data.logger, "Calling RPC {}", method);
         let msg = Message::request(method, params);
         let id = match msg {
             Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
@@ -367,9 +384,11 @@ impl Client {
         };
         let (sender, receiver) = relay_channel();
         let rc_terminator = data.terminator.clone();
+        let logger_cloned = data.logger.clone();
         let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
             .map(Some)
             .then(move |r| {
+                trace!(logger_cloned, "Received RPC answer");
                 drop(rc_terminator);
                 r
             });
@@ -382,7 +401,12 @@ impl Client {
                 };
                 let idmap = data.idmap.clone();
                 let id = id.clone();
+                let logger_cloned = data.logger.clone();
                 let completed = timeout
+                    .then(move |r| {
+                        trace!(logger_cloned, "RPC timed out");
+                        r
+                    })
                     .map(|_| None)
                     .select(received)
                     .map(|(r, _)| r)
@@ -421,6 +445,7 @@ impl Client {
     /// message is sent and yields the client back for further use.
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
         let data = self.data;
+        trace!(data.logger, "Sending notification {}");
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
@@ -557,8 +582,14 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                                                      idmap: idmap.clone(),
                                                      handle: handle.clone(),
                                                      sender: Some(sender.clone()),
+                                                     logger: logger.clone(),
                                                  })));
-        let client = Client::new(&idmap, &ctl, handle, &rc_terminator, &sender);
+        let client = Client::new(&idmap,
+                                 &ctl,
+                                 handle,
+                                 &rc_terminator,
+                                 &sender,
+                                 logger.clone());
         let (sink, stream) = self.connection.split();
         // Create a future for each received item that'll return something. Run some of them in
         // parallel.
