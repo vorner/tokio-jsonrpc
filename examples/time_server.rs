@@ -14,6 +14,7 @@
 #[macro_use]
 extern crate tokio_jsonrpc;
 extern crate tokio_core;
+extern crate tokio_io;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
@@ -27,9 +28,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::io;
 
 use futures::{Future, Stream};
-use tokio_core::io::Io;
 use tokio_core::reactor::{Core, Handle, Interval};
 use tokio_core::net::TcpListener;
+use tokio_io::AsyncRead;
 use serde_json::Value;
 use slog::{Drain, Logger};
 use slog_term::{FullFormat, PlainSyncDecorator};

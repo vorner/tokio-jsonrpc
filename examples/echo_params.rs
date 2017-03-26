@@ -12,11 +12,12 @@ extern crate tokio_jsonrpc;
 extern crate serde_json;
 extern crate futures;
 extern crate tokio_core;
+extern crate tokio_io;
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
-use tokio_core::io::Io;
+use tokio_io::AsyncRead;
 
 use tokio_jsonrpc::{LineCodec, Message, RpcError};
 use tokio_jsonrpc::message::Notification;

@@ -20,12 +20,13 @@
 //!
 //! ```rust
 //! # extern crate tokio_core;
+//! # extern crate tokio_io;
 //! # extern crate tokio_jsonrpc;
 //! # extern crate futures;
 //! #
 //! # use tokio_core::reactor::Core;
 //! # use tokio_core::net::TcpListener;
-//! # use tokio_core::io::Io;
+//! # use tokio_io::AsyncRead;
 //! # use tokio_jsonrpc::LineCodec;
 //! # use futures::{Stream, Sink, Future};
 //! #
@@ -53,13 +54,14 @@
 //!
 //! ```rust,no_run
 //! # extern crate tokio_core;
+//! # extern crate tokio_io;
 //! # extern crate tokio_jsonrpc;
 //! # extern crate futures;
 //! # extern crate serde_json;
 //! #
 //! # use tokio_core::reactor::Core;
 //! # use tokio_core::net::TcpListener;
-//! # use tokio_core::io::Io;
+//! # use tokio_io::AsyncRead;
 //! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
 //! # use futures::{Future, Stream};
 //! # use serde_json::Value;
@@ -116,7 +118,9 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 extern crate uuid;
+extern crate bytes;
 extern crate tokio_core;
+extern crate tokio_io;
 extern crate futures;
 extern crate futures_mpsc;
 extern crate relay;

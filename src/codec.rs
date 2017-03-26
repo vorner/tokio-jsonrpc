@@ -15,7 +15,8 @@
 
 use std::io::{Error, ErrorKind, Result as IoResult};
 
-use tokio_core::io::{Codec, EasyBuf};
+use tokio_io::codec::{Decoder, Encoder};
+use bytes::{BufMut, BytesMut};
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
@@ -32,29 +33,29 @@ trait PositionCache {
 }
 
 /// An encoding function reused by `Line` and `DirtyLine`
-fn encode_codec(msg: &Message, buf: &mut Vec<u8>) -> IoResult<()> {
-    let mut encoded = to_vec(&msg).map_err(err_map)?;
+fn encode_codec(msg: &Message, buf: &mut BytesMut) -> IoResult<()> {
+    let encoded = to_vec(&msg).map_err(err_map)?;
     // As discovered the hard way, we must not overwrite buf, but append to it.
     buf.reserve(encoded.len() + 1);
-    buf.append(&mut encoded);
-    buf.push(b'\n');
+    buf.put_slice(&encoded);
+    buf.put(b'\n');
     Ok(())
 }
 
-fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut EasyBuf, convert: Convert)
+fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut BytesMut, convert: Convert)
                                 -> IoResult<Option<Parsed>>
     where Cache: PositionCache,
           Convert: FnOnce(&[u8]) -> Parsed
 {
     // Where did we stop scanning before? Scan only the new part
     let start_pos = cache.position();
-    if let Some(i) = buf.as_slice()[*start_pos..].iter().position(|&b| b == b'\n') {
+    if let Some(i) = buf[*start_pos..].iter().position(|&b| b == b'\n') {
         let end_pos = *start_pos + i;
-        let line = buf.drain_to(end_pos);
-        buf.drain_to(1);
+        let line = buf.split_to(end_pos);
+        buf.split_to(1);
         // We'll start from the beginning next time.
         *start_pos = 0;
-        Ok(Some(convert(line.as_slice())))
+        Ok(Some(convert(&line)))
     } else {
         // Mark where we ended scanning.
         *start_pos = buf.len();
@@ -85,14 +86,19 @@ impl PositionCache for Line {
     }
 }
 
-impl Codec for Line {
-    type In = Parsed;
-    type Out = Message;
-    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
-        decode_codec(self, buf, from_slice)
-    }
-    fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
+impl Encoder for Line {
+    type Item = Message;
+    type Error = Error;
+    fn encode(&mut self, msg: Message, buf: &mut BytesMut) -> IoResult<()> {
         encode_codec(&msg, buf)
+    }
+}
+
+impl Decoder for Line {
+    type Item = Parsed;
+    type Error = Error;
+    fn decode(&mut self, src: &mut BytesMut) -> IoResult<Option<Parsed>> {
+        decode_codec(self, src, from_slice)
     }
 }
 
@@ -121,15 +127,20 @@ impl PositionCache for DirtyLine {
     }
 }
 
-impl Codec for DirtyLine {
-    type In = Parsed;
-    type Out = Message;
-    fn decode(&mut self, buf: &mut EasyBuf) -> IoResult<Option<Parsed>> {
+impl Decoder for DirtyLine {
+    type Item = Parsed;
+    type Error = Error;
+    fn decode(&mut self, src: &mut BytesMut) -> IoResult<Option<Parsed>> {
         decode_codec(self,
-                     buf,
+                     src,
                      |bytes| from_str(String::from_utf8_lossy(bytes).as_ref()))
     }
-    fn encode(&mut self, msg: Message, buf: &mut Vec<u8>) -> IoResult<()> {
+}
+
+impl Encoder for DirtyLine {
+    type Item = Message;
+    type Error = Error;
+    fn encode(&mut self, msg: Message, buf: &mut BytesMut) -> IoResult<()> {
         encode_codec(&msg, buf)
     }
 }
@@ -150,10 +161,10 @@ mod tests {
 
     #[test]
     fn encode() {
-        let mut output = Vec::new();
+        let mut output = BytesMut::with_capacity(10);
         let mut codec = Line::new();
         let msg = Message::notification("notif".to_owned(), None);
-        let encoded = Vec::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]);
+        let encoded = BytesMut::from(&b"{\"jsonrpc\":\"2.0\",\"method\":\"notif\"}\n"[..]);
         codec.encode(msg.clone(), &mut output).unwrap();
         assert_eq!(encoded, output);
         let mut dirty_codec = DirtyLine::new();
@@ -162,10 +173,8 @@ mod tests {
         assert_eq!(encoded, output);
     }
 
-    fn get_buf(input: &[u8]) -> EasyBuf {
-        let mut result = EasyBuf::new();
-        result.get_mut().extend_from_slice(input);
-        result
+    fn get_buf(input: &[u8]) -> BytesMut {
+        BytesMut::from(input)
     }
 
     #[test]
@@ -174,12 +183,12 @@ mod tests {
             let mut codec = Line::new();
             let mut buf = get_buf(input);
             let result = codec.decode(&mut buf);
-            assert_eq!(rest, buf.as_slice());
+            assert_eq!(rest, &buf);
             // On all the valid inputs, DirtyLine should act the same as Line
             let mut dirty_codec = DirtyLine::new();
             let mut buf = get_buf(input);
             let dirty = dirty_codec.decode(&mut buf);
-            assert_eq!(rest, buf.as_slice());
+            assert_eq!(rest, &buf);
             assert_eq!(result.as_ref().unwrap(), dirty.as_ref().unwrap());
             result
         }

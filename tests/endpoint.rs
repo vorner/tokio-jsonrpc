@@ -7,6 +7,7 @@
 
 extern crate tokio_jsonrpc;
 extern crate tokio_core;
+extern crate tokio_io;
 extern crate futures;
 extern crate relay;
 #[macro_use]
@@ -21,7 +22,8 @@ use futures::{Future, IntoFuture, Stream};
 use futures::future::BoxFuture;
 use tokio_core::reactor::{Core, Handle, Timeout};
 use tokio_core::net::{TcpListener, TcpStream};
-use tokio_core::io::{Framed, Io};
+use tokio_io::codec::Framed;
+use tokio_io::AsyncRead;
 use serde_json::{Value, from_value};
 
 use tokio_jsonrpc::{Client, Endpoint, LineCodec, RpcError, Server, ServerCtl};

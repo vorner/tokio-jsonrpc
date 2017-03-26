@@ -15,10 +15,12 @@ travis-ci = { repository = "vorner/tokio-jsonrpc" }
 appveyor = { repository = "vorner/tokio-jsonrpc" }
 
 [dependencies]
+bytes = "0.4"
 futures = "0.1"
 futures-mpsc = "0.1"
 relay = "0.1"
 tokio-core = "0.1"
+tokio-io = "0.1"
 serde = "0.9"
 serde_derive = "0.9"
 serde_json = "0.9"

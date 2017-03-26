@@ -496,6 +496,7 @@ impl Client {
 ///
 /// ```rust,no_run
 /// # extern crate tokio_core;
+/// # extern crate tokio_io;
 /// # extern crate tokio_jsonrpc;
 /// # extern crate futures;
 /// # #[macro_use]
@@ -504,7 +505,7 @@ impl Client {
 /// # use std::time::Duration;
 /// # use tokio_core::reactor::Core;
 /// # use tokio_core::net::TcpStream;
-/// # use tokio_core::io::Io;
+/// # use tokio_io::AsyncRead;
 /// # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
 /// # use tokio_jsonrpc::message::Response;
 /// # use futures::{Future, Stream};
