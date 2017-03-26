@@ -217,12 +217,16 @@ fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
                                       -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => {
-            trace!(logger, "Server refused notification {}", notification.method);
+            trace!(logger,
+                   "Server refused notification {}",
+                   notification.method);
             Box::new(Ok(None).into_future())
         },
         // We ignore both success and error, so we convert it into something for now
         Some(future) => {
-            trace!(logger, "Server accepted notification {}", notification.method);
+            trace!(logger,
+                   "Server accepted notification {}",
+                   notification.method);
             Box::new(future.into_future().then(|_| Ok(None)))
         },
     }
@@ -294,10 +298,10 @@ fn do_response(idmap: &IDMap, logger: &Logger, response: Response) -> FutureMess
         .as_str()
         .and_then(|id| idmap.borrow_mut().remove(id));
     if let Some(sender) = maybe_sender {
-        trace!(logger, "id" => format!("{:?}", response.id); "Received an RPC response");
+        trace!(logger, "Received an RPC response"; "id" => format!("{:?}", response.id));
         sender.complete(response);
     } else {
-        error!(logger, "id" => format!("{:?}", response.id); "Unexpected RPC response");
+        error!(logger, "Unexpected RPC response"; "id" => format!("{:?}", response.id));
     }
     Box::new(empty())
 }
@@ -310,7 +314,7 @@ fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idma
     let terminated = ctl.0
         .borrow()
         .stop;
-    trace!(logger, "terminated" => terminated, "message" => format!("{:?}", msg); "Do a message");
+    trace!(logger, "Do a message"; "terminated" => terminated, "message" => format!("{:?}", msg));
     if terminated {
         if let Ok(Message::Response(response)) = msg {
             do_response(idmap, logger, response);
@@ -461,7 +465,7 @@ impl Client {
     /// message is sent and yields the client back for further use.
     pub fn notify(self, method: String, params: Option<Value>) -> Notified {
         let data = self.data;
-        trace!(data.logger, "Sending notification {}");
+        trace!(data.logger, "Sending notification {}", method);
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
@@ -584,7 +588,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     // TODO: Some cleanup. This looks a *bit* hairy and complex.
     // TODO: Should we return a better error/return the error once thing resolves?
     pub fn start(self, handle: &Handle) -> (Client, Box<Future<Item = (), Error = IoError>>) {
-        debug!(self.logger, "parallel" => self.parallel; "Starting endpoint");
+        debug!(self.logger, "Starting endpoint"; "parallel" => self.parallel);
         let logger = self.logger;
         let (terminator_sender, terminator_receiver) = relay_channel();
         let (killer_sender, killer_receiver) = relay_channel();
@@ -626,7 +630,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         // futures)
         let cleaner = unfold((), move |_| -> Option<Result<_, _>> {
             let mut idmap = idmap_cloned.borrow_mut();
-            debug!(logger_cloned, "outstanding" => idmap.len(); "Dropping unanswered RPCs");
+            debug!(logger_cloned, "Dropping unanswered RPCs"; "outstanding" => idmap.len());
             idmap.clear();
             None
         });
@@ -658,7 +662,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                 // This will hopefully kill the RPC futures
                 // We kill on both ends, because we may kill the connection or the other side may.
                 let mut idmap = idmap_cloned.borrow_mut();
-                debug!(logger_cloned, "outstanding" => idmap.len(); "Dropping unanswered RPCs");
+                debug!(logger_cloned, "Dropping unanswered RPCs"; "outstanding" => idmap.len());
                 idmap.clear();
                 match result {
                     Ok(_) => {
@@ -667,8 +671,8 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                         Ok(())
                     },
                     Err((e, _select_next)) => {
-                        debug!(logger_cloned, "error" => format!("{}", e);
-                               "Outbount stream ended with an error");
+                        debug!(logger_cloned, "Outbount stream ended with an error";
+                               "error" => format!("{}", e));
                         error_sender.complete(Some(e));
                         Err(())
                     },
