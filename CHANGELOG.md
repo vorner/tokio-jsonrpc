@@ -1,3 +1,13 @@
+# 0.6.0
+
+* Fixes for newer slog (it did an API incompatible change with a patch version
+  bump).
+* Faster compilation times in test/debug builds (by splitting long chains of
+  future/stream modifiers with trait objects).
+* Adapting to tokio's new traits. This is a breaking change in our API, but
+  changing import of `tokio_core::io::Io` to `tokio_io::AsyncRead` is usually
+  enough.
+
 # 0.5.1
 
 * Logging support (the endpoint now can be fed with a logger).
