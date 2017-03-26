@@ -1,3 +1,12 @@
+# 0.7.0
+
+* Modified the `jsonrpc_params` macro:
+  - Several cases don't take names, when not needed (eg. single-value decoding
+    or positional decoding).
+  - The names are now taken as an expression, allowing names legal in JSON
+    strings, but illegal as rust identifiers. They are not used as identifiers
+    anyway.
+
 # 0.6.0
 
 * Fixes for newer slog (it did an API incompatible change with a patch version

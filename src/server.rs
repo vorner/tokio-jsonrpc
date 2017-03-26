@@ -207,8 +207,6 @@ impl Server for ServerChain {
     }
 }
 
-// TODO: Maybe we want to return a result instead every time? The Some and stuff handling is
-// annoying.
 /// Parses the parameters of an RPC or a notification.
 ///
 /// The [`Server`](server/trait.Server.html) receives `&Option<Value>` as the parameters when its
@@ -220,9 +218,14 @@ impl Server for ServerChain {
 /// invalid, it returns early with an `Some(IntoFuture<_, Error = RpcError>)` directly from your
 /// function (which is the return type of the callbacks).
 ///
+/// Note that while this macro may be used directly, the macro
+/// [`jsonrpc_server_impl`](macro.jsonrpc_server_impl.html) which builds the whole `Server` trait
+/// implementation uses it internally and it is the preferred way to use it.
+///
 /// By default, it accepts both parameters passed by a name (inside a JSON object) or by position
 /// (inside an array). If you insist your clients must use named or positional parameters, prefix
-/// the parameter definitions by `named` or `positional` respectively.
+/// the parameter definitions by `named` or `positional` respectively. The `positional` omits the
+/// parameter names in the definitions.
 ///
 /// This also handles optional arguments in the `named` case (and when auto-detecting and a JSON
 /// object is provided).
@@ -235,7 +238,7 @@ impl Server for ServerChain {
 /// a structure that holds all the named parameters.
 ///
 /// If you want to force the single parameter conversion of the whole `Value`, you can use the
-/// macro as `jsonrpc_params!(params, single name: Type)`. However, in this case it returns
+/// macro as `jsonrpc_params!(params, single Type)`. However, in this case it returns
 /// `Result<Type, RpcError>` ‒ since it is expected you might want to try both named and
 /// positional decoding yourself. Also, it expects `&Value`, not `&Option<Value>`.
 ///
@@ -252,7 +255,7 @@ impl Server for ServerChain {
 /// # use tokio_jsonrpc::message::RpcError;
 /// # use serde_json::Value;
 /// fn parse(params: &Option<Value>) -> Option<Result<(i32, bool), RpcError>> {
-///     Some(Ok(jsonrpc_params!(params, num: i32, b: bool)))
+///     Some(Ok(jsonrpc_params!(params, "num" => i32, "b" => bool)))
 /// }
 ///
 /// # fn main() {
@@ -272,7 +275,7 @@ impl Server for ServerChain {
 /// # use tokio_jsonrpc::message::RpcError;
 /// # use serde_json::Value;
 /// fn parse(params: &Option<Value>) -> Option<Result<(Option<i32>, bool), RpcError>> {
-///     Some(Ok(jsonrpc_params!(params, named num: Option<i32>, b: bool)))
+///     Some(Ok(jsonrpc_params!(params, named "num" => Option<i32>, "b" => bool)))
 /// }
 ///
 /// # fn main() {
@@ -282,6 +285,22 @@ impl Server for ServerChain {
 ///            parse(&Some(json!({"b": false, "extra": "ignored"}))).unwrap().unwrap());
 /// parse(&None).unwrap().unwrap_err();
 /// parse(&Some(json!({"num": "hello", "b": false}))).unwrap().unwrap_err();
+/// # }
+/// ```
+///
+/// Enforcing positional parameters:
+///
+/// ```rust
+/// # #[macro_use] extern crate tokio_jsonrpc;
+/// # #[macro_use] extern crate serde_json;
+/// # use tokio_jsonrpc::message::RpcError;
+/// # use serde_json::Value;
+/// fn parse(params: &Option<Value>) -> Option<Result<(i32, bool), RpcError>> {
+///     Some(Ok(jsonrpc_params!(params, positional i32, bool)))
+/// }
+///
+/// # fn main() {
+/// assert_eq!((42, true), parse(&Some(json!([42, true]))).unwrap().unwrap());
 /// # }
 /// ```
 ///
@@ -301,7 +320,7 @@ impl Server for ServerChain {
 /// }
 ///
 /// fn parse(params: &Option<Value>) -> Option<Result<Params, RpcError>> {
-///     let (params,) = jsonrpc_params!(params, params: Params);
+///     let (params,) = jsonrpc_params!(params, "params" => Params);
 ///     Some(Ok(params))
 /// }
 ///
@@ -325,8 +344,8 @@ impl Server for ServerChain {
 /// // If you mind the above limitations, you can ask directly for a single value decoding.
 /// // That returs a Result directly.
 /// assert_eq!(expected,
-///            jsonrpc_params!(&json!({"num": 42, "b": true}), single params: Params).unwrap());
-/// jsonrpc_params!(&json!([{"num": 42, "b": true}]), single params: Params).unwrap_err();
+///            jsonrpc_params!(&json!({"num": 42, "b": true}), single Params).unwrap());
+/// jsonrpc_params!(&json!([{"num": 42, "b": true}]), single Params).unwrap_err();
 /// # }
 /// ```
 #[macro_export]
@@ -352,7 +371,7 @@ macro_rules! jsonrpc_params {
     ( $value:expr ) => { jsonrpc_params!($value,) };
     // An internal helper to decode a single variable and provide a Result instead of returning
     // from the function.
-    ( $value:expr, single $varname:ident : $vartype:ty ) => {{
+    ( $value:expr, single $vartype:ty ) => {{
         // Fix the type
         let val: &$crate::macro_exports::Value = $value;
         $crate::macro_exports::from_value::<$vartype>(val.clone()).map_err(|e| {
@@ -360,14 +379,14 @@ macro_rules! jsonrpc_params {
         })
     }};
     // A helper to count number of arguments
-    ( arity $head:ident ) => { 1 };
-    ( arity $head:ident, $( $tail:ident ),* ) => { 1 + jsonrpc_params!(arity $( $tail ),*) };
+    ( arity $head:ty ) => { 1 };
+    ( arity $head:ty, $( $tail:ty ),* ) => { 1 + jsonrpc_params!(arity $( $tail ),*) };
     // A helper to recurse on decoding of positional arguments
-    ( $spl:expr, accum ( $( $result:tt )* ), positional_decode $vname:ident : $vtype:ty ) => {
+    ( $spl:expr, accum ( $( $result:tt )* ), positional_decode $vtype:ty ) => {
         ( $( $result )*
             {
                 let spl: &[$crate::macro_exports::Value] = $spl;
-                match jsonrpc_params!(&spl[0], single $vname: $vtype) {
+                match jsonrpc_params!(&spl[0], single $vtype) {
                     Ok(result) => result,
                     Err(e) => return Some(Err(e)),
                 }
@@ -375,34 +394,34 @@ macro_rules! jsonrpc_params {
         )
     };
     ( $spl:expr, accum ( $( $result:tt )* ),
-      positional_decode $hname:ident : $htype:ty, $( $tname:ident : $ttype:ty ),+ ) => {{
+      positional_decode $htype:ty, $( $ttype:ty ),+ ) => {{
         let spl: &[$crate::macro_exports::Value] = $spl;
         jsonrpc_params!(&spl[1..], accum (
             $( $result )*
             {
-                match jsonrpc_params!(&spl[0], single $hname: $htype) {
+                match jsonrpc_params!(&spl[0], single $htype) {
                     Ok(result) => result,
                     Err(e) => return Some(Err(e)),
                 }
             },
-        ), positional_decode $( $tname: $ttype ),+ )
+        ), positional_decode $( $ttype ),+ )
     }};
     // Possibly multiple arguments, enforcing positional coding (in an array)
     // It uses recursion to count and access the items in the vector
-    ( $value:expr, positional $( $varname:ident : $vartype:ty ),+ ) => {{
+    ( $value:expr, positional $( $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Some(Err($crate::message::RpcError::
                                     invalid_params(Some("Expected parameters".to_owned()))).into()),
             Some($crate::macro_exports::Value::Array(ref vec)) => {
-                let cnt = jsonrpc_params!(arity $( $varname ),+);
+                let cnt = jsonrpc_params!(arity $( $vartype ),+);
                 if cnt != vec.len() {
                     let err = format!("Wrong number of parameters: expected: {}, got: {}", cnt,
                                       vec.len());
                     return Some(Err($crate::message::RpcError::invalid_params(Some(err))).into());
                 }
                 let spl: &[$crate::macro_exports::Value] = &vec[..];
-                jsonrpc_params!(spl, accum (), positional_decode $( $varname: $vartype ),+)
+                jsonrpc_params!(spl, accum (), positional_decode $( $vartype ),+)
             },
             Some(_) => {
                 return Some(Err($crate::message::RpcError::
@@ -414,7 +433,7 @@ macro_rules! jsonrpc_params {
     // Decode named arguments.
     // It can handle optional arguments in a way, but it has its limits (eg. a non-optional string
     // defaults to an empty one if it is missing).
-    ( $value:expr, named $( $varname:ident : $vartype:ty ),+ ) => {{
+    ( $value:expr, named $( $varname:expr => $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Some(Err($crate::message::RpcError::
@@ -426,8 +445,8 @@ macro_rules! jsonrpc_params {
                             // Yes, stupid borrow checker… can't we get a global constant that
                             // never gets dropped?
                             let null = $crate::macro_exports::Value::Null;
-                            let subval = map.get(stringify!($varname)).unwrap_or(&null);
-                            match jsonrpc_params!(subval, single $varname: $vartype) {
+                            let subval = map.get($varname).unwrap_or(&null);
+                            match jsonrpc_params!(subval, single $vartype) {
                                 Ok(result) => result,
                                 Err(e) => return Some(Err(e)),
                             }
@@ -443,16 +462,16 @@ macro_rules! jsonrpc_params {
         }
     }};
     // Decode params, decide if named or positional based on what arrived
-    ( $value:expr, decide $( $varname:ident : $vartype:ty ),+ ) => {{
+    ( $value:expr, decide $( $varname:expr => $vartype:ty ),+ ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         match *val {
             None => return Some(Err($crate::message::RpcError::
                                     invalid_params(Some("Expected parameters".to_owned()))).into()),
             Some($crate::macro_exports::Value::Array(_)) => {
-                jsonrpc_params!(val, positional $( $varname: $vartype ),+)
+                jsonrpc_params!(val, positional $( $vartype ),+)
             },
             Some($crate::macro_exports::Value::Object(_)) => {
-                jsonrpc_params!(val, named $( $varname: $vartype ),+)
+                jsonrpc_params!(val, named $( $varname => $vartype ),+)
             },
             Some(_) => {
                 return Some(Err($crate::message::RpcError::
@@ -464,20 +483,20 @@ macro_rules! jsonrpc_params {
     // A special case for a single param.
     //
     // We allow decoding it directly, mostly to support users with a complex all-params structure.
-    ( $value:expr, $varname: ident: $vartype: ty ) => {{
+    ( $value:expr, $varname:expr => $vartype:ty ) => {{
         let val: &$crate::macro_exports::Option<$crate::macro_exports::Value> = $value;
         // First try decoding directly
-        let single = val.as_ref().map(|val| jsonrpc_params!(val, single $varname: $vartype));
+        let single = val.as_ref().map(|val| jsonrpc_params!(val, single $vartype));
         if let Some(Ok(result)) = single {
             (result,)
         } else {
             // If direct single decoding didn't work, try the usual multi-param way.
-            jsonrpc_params!(val, decide $varname: $vartype)
+            jsonrpc_params!(val, decide $varname => $vartype)
         }
     }};
     // Propagate multiple params.
-    ( $value:expr, $( $varname:ident : $vartype:ty ),+ ) => {
-        jsonrpc_params!($value, decide $( $varname: $vartype ),+)
+    ( $value:expr, $( $varname:expr => $vartype:ty ),+ ) => {
+        jsonrpc_params!($value, decide $( $varname => $vartype ),+)
     };
 }
 
@@ -773,12 +792,11 @@ mod tests {
         let mut guard = PanicGuard::new();
         // A valid conversion
         // Make sure the return type fits
-        let result: Result<bool, RpcError> =
-            jsonrpc_params!(&Value::Bool(true), single param: bool);
+        let result: Result<bool, RpcError> = jsonrpc_params!(&Value::Bool(true), single bool);
         assert!(result.unwrap());
         // Some invalid conversions
-        jsonrpc_params!(&Value::Null, single param: bool).unwrap_err();
-        jsonrpc_params!(&Value::Array(Vec::new()), single param: bool).unwrap_err();
+        jsonrpc_params!(&Value::Null, single bool).unwrap_err();
+        jsonrpc_params!(&Value::Array(Vec::new()), single bool).unwrap_err();
         guard.disarm();
     }
 
@@ -786,7 +804,7 @@ mod tests {
     ///
     /// This is to prevent attempt to return errors from within the test function.
     fn bool_str_positional(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
-        let (b, s) = jsonrpc_params!(value, positional b: bool, s: String);
+        let (b, s) = jsonrpc_params!(value, positional bool, String);
         Some(Ok((b, s)))
     }
 
@@ -798,7 +816,7 @@ mod tests {
     ///
     /// It also checks we don't get confused with an array inside the parameter array.
     fn single_positional(value: &Option<Value>) -> Option<Result<Vec<String>, RpcError>> {
-        let (r,) = jsonrpc_params!(value, positional arr: Vec<String>);
+        let (r,) = jsonrpc_params!(value, positional Vec<String>);
         Some(Ok(r))
     }
 
@@ -827,7 +845,7 @@ mod tests {
 
     /// Helper function to decode two values as named arguments
     fn bool_str_named(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
-        let (b, s) = jsonrpc_params!(value, named b: bool, s: String);
+        let (b, s) = jsonrpc_params!(value, named "b" => bool, "s" => String);
         Some(Ok((b, s)))
     }
 
@@ -838,13 +856,13 @@ mod tests {
 
     /// Like above, but with only one parameter.
     fn single_named(value: &Option<Value>) -> Option<Result<TestStruct, RpcError>> {
-        let (ts,) = jsonrpc_params!(value, named ts: TestStruct);
+        let (ts,) = jsonrpc_params!(value, named "ts" => TestStruct);
         Some(Ok(ts))
     }
 
     /// Test an optional value might be missing.
     fn optional_named(value: &Option<Value>) -> Option<Result<Option<u32>, RpcError>> {
-        let (ov,) = jsonrpc_params!(value, named ov: Option<u32>);
+        let (ov,) = jsonrpc_params!(value, named "ov" => Option<u32>);
         Some(Ok(ov))
     }
 
@@ -881,7 +899,7 @@ mod tests {
     ///
     /// The decoding decides how to do so based on what arrived.
     fn bool_str(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
-        let (b, s) = jsonrpc_params!(value, b: bool, s: String);
+        let (b, s) = jsonrpc_params!(value, "b" => bool, "s" => String);
         Some(Ok((b, s)))
     }
 
@@ -899,7 +917,7 @@ mod tests {
 
     /// A helper for the `decide_single` test.
     fn decode_test_struct(value: &Option<Value>) -> Option<Result<TestStruct, RpcError>> {
-        let (ts,) = jsonrpc_params!(value, ts: TestStruct);
+        let (ts,) = jsonrpc_params!(value, "ts" => TestStruct);
         Some(Ok(ts))
     }
 
