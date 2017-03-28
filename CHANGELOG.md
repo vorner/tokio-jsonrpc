@@ -1,3 +1,7 @@
+# 0.7.1
+
+* Fix termination of the endpoint when the other end drops connection.
+
 # 0.7.0
 
 * Modified the `jsonrpc_params` macro:

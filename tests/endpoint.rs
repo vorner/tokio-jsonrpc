@@ -506,4 +506,17 @@ fn mutual() {
     reactor.run(all).unwrap();
 }
 
+/// Check the server terminates if we drop the other end.
+#[test]
+fn conn_terminate() {
+    let (mut reactor, s1, s2) = prepare();
+    let all = {
+        let handle = reactor.handle();
+        let (_c, s_fin) = process_start(Endpoint::new(s1, AnswerServer).start(&handle));
+        s_fin
+    };
+    drop(s2);
+    reactor.run(all).unwrap();
+}
+
 // TODO: Test the batches (we can't call batches now, can we?)

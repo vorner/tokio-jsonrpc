@@ -629,11 +629,15 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let logger_cloned = logger.clone();
         // A stream that contains no elements, but cleans the idmap once called (to kill the RPC
         // futures)
+        let ctl_clone = ctl.clone();
         let cleaner = unfold((), move |_| -> Option<Result<_, _>> {
             let mut idmap = idmap_cloned.borrow_mut();
-            debug!(logger_cloned, "Dropping unanswered RPCs"; "outstanding" => idmap.len());
+            debug!(logger_cloned, "Dropping unanswered RPCs (EOS)"; "outstanding" => idmap.len());
             idmap.clear();
-            None
+            // Terminate the server manually when we reach the end of input, because it holds the
+            // client alive ‒ this will end the messages from the client endpoint.
+            ctl_clone.terminate();
+            Some(Ok((None, ())))
         });
         let idmap_cloned = idmap.clone();
         let logger_cloned = logger.clone();
