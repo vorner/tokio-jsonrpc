@@ -1,3 +1,7 @@
+# 0.7.2
+
+* Extention of the `jsonrpc_params!` macro to allow returning errors instead of early exit.
+
 # 0.7.1
 
 * Fix termination of the endpoint when the other end drops connection.

@@ -242,6 +242,10 @@ impl Server for ServerChain {
 /// `Result<Type, RpcError>` ‒ since it is expected you might want to try both named and
 /// positional decoding yourself. Also, it expects `&Value`, not `&Option<Value>`.
 ///
+/// You can also force the macro to return the `Result<(Type, Type, ...), RpcError>` if you prefer,
+/// by prefixing the parameter definitions with the `wrap` token. This currently works only with
+/// the auto-detection case (others will come).
+///
 /// The macro has other variants than the mentioned here. They are mostly used internally by the
 /// macro itself and aren't meant to be used directly.
 ///
@@ -263,6 +267,10 @@ impl Server for ServerChain {
 /// assert_eq!((42, true), parse(&Some(json!({"num": 42, "b": true}))).unwrap().unwrap());
 /// parse(&None).unwrap().unwrap_err();
 /// parse(&Some(json!({"num": "hello", "b": false}))).unwrap().unwrap_err();
+/// // Return by the macro instead of exit
+/// assert_eq!((42, true), jsonrpc_params!(&Some(json!({"num": 42, "b": true})),
+///                                        wrap "num" => i32, "b" => bool).unwrap());
+/// jsonrpc_params!(&None, wrap "num" => i32, "b" => bool).unwrap_err();
 /// # }
 /// ```
 ///
@@ -497,6 +505,16 @@ macro_rules! jsonrpc_params {
     // Propagate multiple params.
     ( $value:expr, $( $varname:expr => $vartype:ty ),+ ) => {
         jsonrpc_params!($value, decide $( $varname => $vartype ),+)
+    };
+    // Return multiple values as a result
+    ( $value:expr, wrap $( $varname:expr => $vartype:ty),+ ) => {
+        {
+            fn convert(params: &Option<$crate::macro_exports::Value>)
+                       -> Option<Result<($( $vartype, )+), $crate::message::RpcError>> {
+                Some(Ok(jsonrpc_params!(params, $( $varname => $vartype),+)))
+            }
+            convert($value).unwrap()
+        }
     };
 }
 
@@ -913,6 +931,20 @@ mod tests {
                    bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap());
         assert_eq!((true, "hello".to_owned()),
                    bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
+    }
+
+    /// Like decide, but with auto-wrapping support from the macro.
+    #[test]
+    fn decide_direct() {
+        jsonrpc_params!(&None, wrap "b" => bool, "s" => String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Null), wrap "b" => bool, "s" => String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Bool(true)), wrap "b" => bool, "s" => String).unwrap_err();
+        assert_eq!((true, "hello".to_owned()),
+                   jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
+                                   wrap "b" => bool, "s" => String).unwrap());
+        assert_eq!((true, "hello".to_owned()),
+                   jsonrpc_params!(&Some(json!([true, "hello"])),
+                                   wrap "b" => bool, "s" => String).unwrap());
     }
 
     /// A helper for the `decide_single` test.
