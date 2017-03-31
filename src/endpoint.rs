@@ -126,7 +126,7 @@ impl ServerCtl {
                         .expect("`client` called after termination"),
                     internal.logger.clone())
     }
-    // This one is for unit tests, not part of the general-purpose API. It creates a dummpy
+    // This one is for unit tests, not part of the general-purpose API. It creates a dummy
     // ServerCtl that does nothing, but still can be passed to the Server for checking.
     //
     // It returns:
@@ -134,6 +134,7 @@ impl ServerCtl {
     // * Drop future (fires when the corresponding server would get droppend)
     // * Kill future (fires when kill is signalled)
     #[doc(hidden)]
+    #[cfg(test)]
     pub fn new_test() -> (Self, RelayReceiver<()>, RelayReceiver<()>) {
         let (drop_sender, drop_receiver) = relay_channel();
         let (kill_sender, kill_receiver) = relay_channel();
