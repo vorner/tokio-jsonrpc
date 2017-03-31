@@ -173,8 +173,6 @@ impl Deserialize for Response {
             _ => {
                 let err = D::Error::custom("Either 'error' or 'result' is expected, but not both");
                 return Err(err);
-                // A trick to make the compiler accept this branch
-                unreachable!();
             },
         };
         Ok(Response {
