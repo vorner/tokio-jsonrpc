@@ -25,7 +25,8 @@ serde = "0.9"
 serde_derive = "0.9"
 serde_json = "0.9"
 uuid = { version = "0.4", features = ["v4"] }
-slog = "~2.0.0-1"
+slog = "~2.0.0-3"
 
 [dev-dependencies]
-slog-term = "~2.0.0-1"
+slog-term = "~2.0.0-3"
+slog-async = "~2.0.0-3"
