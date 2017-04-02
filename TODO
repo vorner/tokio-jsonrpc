@@ -6,5 +6,3 @@
 • Go through the documentation and use third form everywhere (eg. „returns“ instead of „return“)
 • BoundaryCodec can now be implemented, serde-json now provides error details
 • Document panics around returning un-jsonizable types
-• More wrap variants for the jsonrpc_params macro.
-• Use unsync variants from futures (we no longer need the external crates)

@@ -136,6 +136,7 @@ pub mod server;
 pub mod macro_exports {
     pub use serde_json::{Value, from_value};
     pub use std::option::Option;
+    pub use std::result::Result;
 }
 
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};

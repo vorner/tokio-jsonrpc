@@ -243,8 +243,7 @@ impl Server for ServerChain {
 /// positional decoding yourself. Also, it expects `&Value`, not `&Option<Value>`.
 ///
 /// You can also force the macro to return the `Result<(Type, Type, ...), RpcError>` if you prefer,
-/// by prefixing the parameter definitions with the `wrap` token. This currently works only with
-/// the auto-detection case (others will come).
+/// by prefixing the parameter definitions with the `wrap` token.
 ///
 /// The macro has other variants than the mentioned here. They are mostly used internally by the
 /// macro itself and aren't meant to be used directly.
@@ -507,11 +506,35 @@ macro_rules! jsonrpc_params {
         jsonrpc_params!($value, decide $( $varname => $vartype ),+)
     };
     // Return multiple values as a result
-    ( $value:expr, wrap $( $varname:expr => $vartype:ty),+ ) => {
+    ( $value:expr, wrap $( $varname:expr => $vartype:ty ),+ ) => {
         {
-            fn convert(params: &Option<$crate::macro_exports::Value>)
-                       -> Option<Result<($( $vartype, )+), $crate::message::RpcError>> {
-                Some(Ok(jsonrpc_params!(params, $( $varname => $vartype),+)))
+            fn convert(params: &$crate::macro_exports::Option<$crate::macro_exports::Value>)
+                       -> $crate::macro_exports::Option<
+                           $crate::macro_exports::Result<($( $vartype, )+),
+                                                         $crate::message::RpcError>> {
+                Some(Ok(jsonrpc_params!(params, $( $varname => $vartype ),+)))
+            }
+            convert($value).unwrap()
+        }
+    };
+    ( $value:expr, wrap named $( $varname:expr => $vartype:ty ),+ ) => {
+        {
+            fn convert(params: &$crate::macro_exports::Option<$crate::macro_exports::Value>)
+                       -> $crate::macro_exports::Option<
+                           $crate::macro_exports::Result<($( $vartype, )+),
+                                                          $crate::message::RpcError>> {
+                Some(Ok(jsonrpc_params!(params, named $( $varname => $vartype ),+)))
+            }
+            convert($value).unwrap()
+        }
+    };
+    ( $value:expr, wrap positional $( $vartype:ty ),+ ) => {
+        {
+            fn convert(params: &$crate::macro_exports::Option<$crate::macro_exports::Value>)
+                       -> $crate::macro_exports::Option<
+                           $crate::macro_exports::Result<($( $vartype, )+),
+                                                         $crate::message::RpcError>> {
+                Some(Ok(jsonrpc_params!(params, positional $( $vartype ),+)))
             }
             convert($value).unwrap()
         }
@@ -861,6 +884,21 @@ mod tests {
                    single_positional(&Some(json!([["hello", "world"]]))).unwrap().unwrap());
     }
 
+    /// Similar to `positional`, but with using the macro wrap support to return a result.
+    #[test]
+    fn positional_direct() {
+        let mut guard = PanicGuard::new();
+        jsonrpc_params!(&None, wrap positional bool, String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Null), wrap positional bool, String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Bool(true)), wrap positional bool, String).unwrap_err();
+        jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})), wrap positional bool, String)
+            .unwrap_err();
+        assert_eq!((true, "hello".to_owned()),
+                   jsonrpc_params!(&Some(json!([true, "hello"])),
+                                   wrap positional bool, String).unwrap());
+        guard.disarm();
+    }
+
     /// Helper function to decode two values as named arguments
     fn bool_str_named(value: &Option<Value>) -> Option<Result<(bool, String), RpcError>> {
         let (b, s) = jsonrpc_params!(value, named "b" => bool, "s" => String);
@@ -913,6 +951,23 @@ mod tests {
         assert_eq!(None, optional_named(&Some(json!({}))).unwrap().unwrap());
     }
 
+    /// Like `named`, but using auto-wrapping support from the macro.
+    #[test]
+    fn named_direct() {
+        let mut guard = PanicGuard::new();
+        jsonrpc_params!(&None, wrap named "b" => bool, "s" => String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Null), wrap named "b" => bool, "s" => String).unwrap_err();
+        jsonrpc_params!(&Some(Value::Bool(true)),
+                        wrap named "b" => bool, "s" => String)
+                .unwrap_err();
+        assert_eq!((true, "hello".to_owned()),
+                   jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
+                                   wrap "b" => bool, "s" => String).unwrap());
+        jsonrpc_params!(&Some(json!([true, "hello"])), wrap named "b" => bool, "s" => String)
+            .unwrap_err();
+        guard.disarm();
+    }
+
     /// A helper function to decode two parameters.
     ///
     /// The decoding decides how to do so based on what arrived.
@@ -933,9 +988,10 @@ mod tests {
                    bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
     }
 
-    /// Like decide, but with auto-wrapping support from the macro.
+    /// Like `decide`, but with auto-wrapping support from the macro.
     #[test]
     fn decide_direct() {
+        let mut guard = PanicGuard::new();
         jsonrpc_params!(&None, wrap "b" => bool, "s" => String).unwrap_err();
         jsonrpc_params!(&Some(Value::Null), wrap "b" => bool, "s" => String).unwrap_err();
         jsonrpc_params!(&Some(Value::Bool(true)), wrap "b" => bool, "s" => String).unwrap_err();
@@ -945,6 +1001,7 @@ mod tests {
         assert_eq!((true, "hello".to_owned()),
                    jsonrpc_params!(&Some(json!([true, "hello"])),
                                    wrap "b" => bool, "s" => String).unwrap());
+        guard.disarm();
     }
 
     /// A helper for the `decide_single` test.
