@@ -23,8 +23,10 @@ use std::cell::RefCell;
 use futures::{Future, IntoFuture, Sink, Stream};
 use futures::future::Either;
 use futures::stream::{self, Once, empty, unfold};
-use futures_mpsc::{Sender, channel};
-use relay::{Sender as RelaySender, channel as relay_channel};
+use futures::unsync::mpsc::{Sender, channel};
+use futures::unsync::oneshot::{Sender as OneSender, channel as one_channel};
+#[cfg(test)]
+use futures::unsync::oneshot::Receiver as OneReceiver;
 use serde_json::{Value, to_value};
 use slog::{Discard, Logger};
 use tokio_core::reactor::{Handle, Timeout};
@@ -35,14 +37,15 @@ use server::{Empty as EmptyServer, Server};
 /// Thing that terminates the connection once dropped.
 ///
 /// A trick to terminate when all Rcs are forgotten.
-struct DropTerminator(Option<RelaySender<()>>);
+struct DropTerminator(Option<OneSender<()>>);
 
 impl Drop for DropTerminator {
     fn drop(&mut self) {
-        self.0
-            .take()
-            .unwrap()
-            .complete(());
+        // Don't care about the result. If the other side is gone, we just have nothing to do.
+        drop(self.0
+                 .take()
+                 .unwrap()
+                 .send(()));
     }
 }
 
@@ -57,7 +60,7 @@ struct ServerCtlInternal {
     // Terminate the nice way (if all others also drop)
     terminator: Option<RcDrop>,
     // Terminate right now
-    killer: Option<RelaySender<()>>,
+    killer: Option<OneSender<()>>,
     // Info to be able to create a new clients
     idmap: IDMap,
     handle: Handle,
@@ -102,7 +105,7 @@ impl ServerCtl {
             // The option might be None, but only after we called it already.
             internal.killer
                 .take()
-                .map(|s| s.complete(()));
+                .map(|s| s.send(()));
         });
     }
     /// Create a new client for the current endpoint.
@@ -135,9 +138,9 @@ impl ServerCtl {
     // * Kill future (fires when kill is signalled)
     #[doc(hidden)]
     #[cfg(test)]
-    pub fn new_test() -> (Self, ::relay::Receiver<()>, ::relay::Receiver<()>) {
-        let (drop_sender, drop_receiver) = relay_channel();
-        let (kill_sender, kill_receiver) = relay_channel();
+    pub fn new_test() -> (Self, OneReceiver<()>, OneReceiver<()>) {
+        let (drop_sender, drop_receiver) = one_channel();
+        let (kill_sender, kill_receiver) = one_channel();
         let (msg_sender, _msg_receiver) = channel(1);
         let terminator = DropTerminator(Some(drop_sender));
         let core = ::tokio_core::reactor::Core::new().unwrap();
@@ -179,7 +182,7 @@ fn test_boxed<S>(s: S) -> S {
     s
 }
 
-type IDMap = Rc<RefCell<HashMap<String, RelaySender<Response>>>>;
+type IDMap = Rc<RefCell<HashMap<String, OneSender<Response>>>>;
 
 // A future::stream::once that takes only the success value, for convenience.
 fn once<T, E>(item: T) -> Once<T, E> {
@@ -300,7 +303,9 @@ fn do_response(idmap: &IDMap, logger: &Logger, response: Response) -> FutureMess
         .and_then(|id| idmap.borrow_mut().remove(id));
     if let Some(sender) = maybe_sender {
         trace!(logger, "Received an RPC response"; "id" => format!("{:?}", response.id));
-        sender.complete(response);
+        // Don't care about the result, if the other side went away, it doesn't need the response
+        // and that's OK with us.
+        drop(sender.send(response));
     } else {
         error!(logger, "Unexpected RPC response"; "id" => format!("{:?}", response.id));
     }
@@ -346,7 +351,7 @@ fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idma
 /// have only one item extra.
 #[derive(Clone)]
 struct ClientData {
-    /// Mapping from IDs to the relays to wake up the recipient futures.
+    /// Mapping from IDs to the oneshots to wake up the recipient futures.
     idmap: IDMap,
     /// The control of the server.
     ctl: ServerCtl,
@@ -403,7 +408,7 @@ impl Client {
             Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
             _ => unreachable!("We produce only string IDs"),
         };
-        let (sender, receiver) = relay_channel();
+        let (sender, receiver) = one_channel();
         let rc_terminator = data.terminator.clone();
         let logger_cloned = data.logger.clone();
         let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
@@ -596,8 +601,8 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     pub fn start(self, handle: &Handle) -> (Client, Box<Future<Item = (), Error = IoError>>) {
         debug!(self.logger, "Starting endpoint"; "parallel" => self.parallel);
         let logger = self.logger;
-        let (terminator_sender, terminator_receiver) = relay_channel();
-        let (killer_sender, killer_receiver) = relay_channel();
+        let (terminator_sender, terminator_receiver) = one_channel();
+        let (killer_sender, killer_receiver) = one_channel();
         let (sender, receiver) = channel(32);
         let idmap = Rc::new(RefCell::new(HashMap::new()));
         let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
@@ -663,7 +668,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let logger_cloned = logger.clone();
         // Take both the client RPCs and the answers
         let outbound = answers.select(receiver.map_err(shouldnt_happen));
-        let (error_sender, error_receiver) = relay_channel::<Option<IoError>>();
+        let (error_sender, error_receiver) = one_channel::<Option<IoError>>();
         // And send them all (or kill it, if it happens first)
         let transmitted = sink.send_all(outbound)
             .map(|_| ())
@@ -677,13 +682,17 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                 match result {
                     Ok(_) => {
                         debug!(logger_cloned, "Outbount stream ended successfully");
-                        error_sender.complete(None);
+                        // Don't care about result (the other side simply doesn't care about the
+                        // notification on error).
+                        drop(error_sender.send(None));
                         Ok(())
                     },
                     Err((e, _select_next)) => {
                         debug!(logger_cloned, "Outbount stream ended with an error";
                                "error" => format!("{}", e));
-                        error_sender.complete(Some(e));
+                        // Don't care about result (the other side simply doesn't care about the
+                        // notification on error).
+                        drop(error_sender.send(Some(e)));
                         Err(())
                     },
                 }

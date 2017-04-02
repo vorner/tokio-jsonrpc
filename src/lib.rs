@@ -122,8 +122,6 @@ extern crate bytes;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate futures;
-extern crate futures_mpsc;
-extern crate relay;
 #[macro_use]
 extern crate slog;
 

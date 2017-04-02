@@ -9,7 +9,6 @@ extern crate tokio_jsonrpc;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate futures;
-extern crate relay;
 #[macro_use]
 extern crate serde_json;
 

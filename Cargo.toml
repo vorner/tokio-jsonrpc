@@ -18,9 +18,7 @@ appveyor = { repository = "vorner/tokio-jsonrpc" }
 
 [dependencies]
 bytes = "0.4"
-futures = "0.1"
-futures-mpsc = "0.1"
-relay = "0.1"
+futures = "~0.1.11"
 tokio-core = "0.1"
 tokio-io = "0.1"
 serde = "0.9"
