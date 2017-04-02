@@ -567,6 +567,10 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     /// As the RPC may be a future, it is possible to have multiple of them in the pipeline at
     /// once. By default, no parallelism is allowed on one endpoint. Calling this sets how many
     /// parallel futures there may be at one time on this particular endpoint.
+    ///
+    /// This influences the server half only (eg. protects it from being overloaded by a client)
+    /// and is par single client. The client doesn't limit the amount of sent requests in any way,
+    /// since it can be easily managed by the caller.
     pub fn parallel(self, parallel: usize) -> Self {
         Endpoint { parallel: parallel, ..self }
     }
