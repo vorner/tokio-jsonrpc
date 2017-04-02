@@ -1,3 +1,5 @@
+# 0.7.3
+
 * Extend the `jsonrpc_params!` macro to allow returning errors instead of early
   exit in `named` and `positional` modes in addition to the auto-detected one.
 * Cleanups.
