@@ -1,7 +1,9 @@
 [package]
 name = "tokio-jsonrpc"
 version = "0.7.2"
-authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+authors = [
+    "Michal 'vorner' Vaner <vorner@vorner.cz>",
+    "Ignacio Corderi <icorderi@msn.com>"]
 description = "An implementation of JSON RPC 2.0 for tokio"
 documentation = "https://docs.rs/tokio-jsonrpc"
 repository = "https://github.com/vorner/tokio-jsonrpc"
