@@ -24,10 +24,10 @@ use futures::{Future, IntoFuture, Sink, Stream};
 use futures::future::Either;
 use futures::stream::{self, Once, empty, unfold};
 use futures_mpsc::{Sender, channel};
-use relay::{Receiver as RelayReceiver, Sender as RelaySender, channel as relay_channel};
+use relay::{Sender as RelaySender, channel as relay_channel};
 use serde_json::{Value, to_value};
 use slog::{Discard, Logger};
-use tokio_core::reactor::{Core, Handle, Timeout};
+use tokio_core::reactor::{Handle, Timeout};
 
 use message::{Broken, Message, Notification, Parsed, Request, Response, RpcError};
 use server::{Empty as EmptyServer, Server};
@@ -135,12 +135,12 @@ impl ServerCtl {
     // * Kill future (fires when kill is signalled)
     #[doc(hidden)]
     #[cfg(test)]
-    pub fn new_test() -> (Self, RelayReceiver<()>, RelayReceiver<()>) {
+    pub fn new_test() -> (Self, ::relay::Receiver<()>, ::relay::Receiver<()>) {
         let (drop_sender, drop_receiver) = relay_channel();
         let (kill_sender, kill_receiver) = relay_channel();
         let (msg_sender, _msg_receiver) = channel(1);
         let terminator = DropTerminator(Some(drop_sender));
-        let core = Core::new().unwrap();
+        let core = ::tokio_core::reactor::Core::new().unwrap();
         let handle = core.handle();
 
         let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
