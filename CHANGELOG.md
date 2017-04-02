@@ -1,3 +1,6 @@
+* Cleanups.
+* Another example added.
+
 # 0.7.2
 
 * Extention of the `jsonrpc_params!` macro to allow returning errors instead of early exit.
