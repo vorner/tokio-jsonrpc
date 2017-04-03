@@ -5,6 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+#[macro_use]
 extern crate tokio_jsonrpc;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -25,7 +26,7 @@ use tokio_io::codec::Framed;
 use tokio_io::AsyncRead;
 use serde_json::{Value, from_value};
 
-use tokio_jsonrpc::{Client, Endpoint, LineCodec, RpcError, Server, ServerCtl};
+use tokio_jsonrpc::{Client, Endpoint, LineCodec, Params, RpcError, Server, ServerCtl};
 
 /// A test server
 ///
@@ -37,14 +38,14 @@ impl Server for AnswerServer {
     type Success = u32;
     type RpcCallResult = Result<u32, RpcError>;
     type NotificationResult = Result<(), ()>;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         ctl.terminate();
         assert_eq!(method, "test");
         assert!(params.is_none());
         Some(Ok(42))
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
                     -> Option<Self::NotificationResult> {
         ctl.terminate();
         assert_eq!(method, "notif");
@@ -151,7 +152,7 @@ impl Server for AnotherServer {
     type Success = bool;
     type RpcCallResult = BoxFuture<bool, RpcError>;
     type NotificationResult = Result<(), ()>;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         let mut num = self.1.get();
         num -= 1;
@@ -162,7 +163,8 @@ impl Server for AnotherServer {
         if method == "timeout" {
             let params: Vec<u64> = from_value(params.as_ref()
                                                   .unwrap()
-                                                  .clone())
+                                                  .clone()
+                                                  .into_value())
                     .unwrap();
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
@@ -223,7 +225,7 @@ fn timeout() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         client.call("timeout".to_owned(),
-                    Some(json!([3, 0])),
+                    params!([3,0]),
                     Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| assert!(response.is_none()))
@@ -245,7 +247,7 @@ fn delayed() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         client.call("timeout".to_owned(),
-                    Some(json!([0, 500000000])),
+                    params!([0, 500000000]),
                     Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| {
@@ -271,7 +273,7 @@ fn client_only() {
         Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle);
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
-        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+        client.call("timeout".to_owned(), params!([0, 500000000]), None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 response.as_ref().unwrap();
@@ -302,7 +304,7 @@ fn parallel() {
         let first_finished = Rc::new(Cell::new(false));
         let first_finished_cloned = first_finished.clone();
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), params!([0, 500000000]), None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 assert!(response.unwrap()
@@ -343,7 +345,7 @@ fn seq() {
                               .start(&handle));
         let (client, _client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                     .start(&handle));
-        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+        client.call("timeout".to_owned(), params!([0, 500000000]), None)
             .and_then(|(client, answered)| {
                 let first_finished = Rc::new(Cell::new(false));
                 let first_finished_cloned = first_finished.clone();
@@ -393,7 +395,7 @@ fn kill() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), params!([0, 500000000]), None)
             .and_then(|(_client, answered)| answered)
             .then(|response| {
                 // This answer should not arrive, as the connection is killed before
@@ -431,7 +433,7 @@ fn kill_client() {
                                                                    .start(&handle));
         let ctl = client.server_ctl().clone();
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), params!([0, 500000000]), None)
             .and_then(|(_client, answered)| answered)
             .then(|response| {
                 // This answer should not arrive, as the connection is killed before
@@ -463,7 +465,7 @@ impl Server for MutualServer {
     type Success = Value;
     type RpcCallResult = Box<Future<Item = Value, Error = RpcError>>;
     type NotificationResult = Result<(), ()>;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, _params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         if method == "ask" {
             let result = ctl.client()
@@ -475,7 +477,7 @@ impl Server for MutualServer {
             None
         }
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, _params: &Option<Value>)
+    fn notification(&self, ctl: &ServerCtl, method: &str, _params: &Option<Params>)
                     -> Option<Self::NotificationResult> {
         if method == "terminate" {
             ctl.terminate();

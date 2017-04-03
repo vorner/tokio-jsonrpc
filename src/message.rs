@@ -12,7 +12,7 @@
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde::de::{Deserialize, Deserializer, Error, Unexpected};
-use serde_json::{Value, to_value};
+use serde_json::{self, Value, to_value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,14 +36,140 @@ impl Deserialize for Version {
     }
 }
 
+/// An RPC method params
+///
+/// Not all json is a valid RPC params.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum Params {
+    Positional(Vec<Value>),
+    Named(serde_json::Map<String, Value>),
+}
+
+impl Params {
+    /// Wether or not there are any params
+    pub fn is_empty(&self) -> bool {
+        match *self {
+            Params::Positional(ref args) => args.is_empty(),
+            Params::Named(ref fields) => fields.is_empty(),
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        match self {
+            Params::Positional(xs) => Value::Array(xs),
+            Params::Named(x) => Value::Object(x),
+        }
+    }
+}
+
+// Helper fuction for skipping the params field serialization when there are no params
+pub fn params_empty(x: &Option<Params>) -> bool {
+    match *x {
+        Some(ref x) => x.is_empty(),
+        None => true,
+    }
+}
+
+// TODO: how do we sanitize uses of `json_internal!()`? check the rocket crate
+// TODO: missing docs
+#[macro_export]
+macro_rules! params {
+
+    //////////////////////////////////////////////////////////////////////////
+    // The main implementation.
+    //
+    // Must be invoked as: params!($($json)+)
+    //////////////////////////////////////////////////////////////////////////
+
+    () => {
+        None
+    };
+
+    // Review: do we want to use this to send a `"params": null` as opposed to skipping it?
+    //         params!() or None can be the skip while params!(null) will actually send null
+    //         Notes:
+    //           - Params::Null needs to be added
+    //           - `None` and `Some(Params::Null)` are "almost" equivalent on server side
+    (null) => {
+        None
+    };
+
+    (true) => {
+        Some($crate::Params::Positional(vec![$crate::macro_exports::Value::Bool(true)]))
+    };
+
+    (false) => {
+        Some($crate::Params::Positional(vec![$crate::macro_exports::Value::Bool(false)]))
+    };
+
+    ([]) => {
+        {
+            Some($crate::Params::Positional(vec![]))
+        }
+    };
+
+    ([ $($tt:tt)+ ]) => {
+        {
+            match $crate::macro_exports::Value::Array(json_internal!(@array [] $($tt)+)) {
+                $crate::macro_exports::Value::Array(xs) => Some($crate::Params::Positional(xs)),
+                _ => unreachable!(),
+            }
+        }
+    };
+
+    ({}) => {
+        {
+            Some($crate::Params::Named($crate::Map::new()))
+        }
+    };
+
+    ({ $($tt:tt)+ }) => {
+        {
+            let mut object = $crate::macro_exports::Map::new();
+            json_internal!(@object object () $($tt)+);
+            Some($crate::Params::Named(object))
+        }
+    };
+
+    // Force structs to be serialized as positional
+    (pos $other:expr) => {
+        match $crate::macro_exports::to_value(&$other).unwrap() {
+            // Turn the object into positional discarding the names
+            $crate::macro_exports::Value::Object(x) => {
+                let mut xs = Vec::with_capacity(x.len());
+                for (_,v) in x {
+                    xs.push(v);
+                }
+                Some($crate::Params::Positional(xs))
+            },
+            $crate::macro_exports::Value::Array(xs) =>
+                Some($crate::Params::Positional(xs)),
+            value => Some($crate::Params::Positional(vec![value])),
+        }
+    };
+
+    // Any Serialize type: numbers, strings, struct literals, variables etc.
+    // Must be below every other rule.
+    ($other:expr) => {
+        match $crate::macro_exports::to_value(&$other).unwrap() {
+            $crate::macro_exports::Value::Object(x) =>
+                Some($crate::Params::Named(x)),
+            $crate::macro_exports::Value::Array(xs) =>
+                Some($crate::Params::Positional(xs)),
+            value => Some($crate::Params::Positional(vec![value])),
+        }
+    };
+}
+
 /// An RPC request.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     jsonrpc: Version,
     pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
+    #[serde(skip_serializing_if = "params_empty")]
+    pub params: Option<Params>,
     pub id: Value,
 }
 
@@ -189,8 +315,8 @@ impl Deserialize for Response {
 pub struct Notification {
     jsonrpc: Version,
     pub method: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
+    #[serde(skip_serializing_if = "params_empty")]
+    pub params: Option<Params>,
 }
 
 /// One message of the JSON RPC protocol.
@@ -235,7 +361,7 @@ impl Message {
     /// A constructor for a request.
     ///
     /// The ID is auto-generated.
-    pub fn request(method: String, params: Option<Value>) -> Self {
+    pub fn request(method: String, params: Option<Params>) -> Self {
         Message::Request(Request {
                              jsonrpc: Version,
                              method: method,
@@ -252,7 +378,7 @@ impl Message {
                           })
     }
     /// A constructor for a notification.
-    pub fn notification(method: String, params: Option<Value>) -> Self {
+    pub fn notification(method: String, params: Option<Params>) -> Self {
         Message::Notification(Notification {
                                   jsonrpc: Version,
                                   method: method,
@@ -336,6 +462,12 @@ mod tests {
     use serde_json::ser::to_vec;
     use serde_json::de::from_slice;
 
+    #[derive(Serialize)]
+    struct TestParam {
+        x: usize,
+        y: usize,
+    }
+
     /// Test serialization and deserialization of the Message
     ///
     /// We first deserialize it from a string. That way we check deserialization works.
@@ -360,12 +492,46 @@ mod tests {
                                   params: None,
                                   id: json!(1),
                               }));
+        // A request with `"params": null`
+        // Note: This is **NOT** part of the specification, but we will honor it as the
+        // same as not being present.
+        one(r#"{"jsonrpc": "2.0", "method": "call", "params": null, "id": 1}"#,
+            &Message::Request(Request {
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: None,
+                                  id: json!(1),
+                              }));
         // A request with parameters
         one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
             &Message::Request(Request {
                                   jsonrpc: Version,
                                   method: "call".to_owned(),
-                                  params: Some(json!([1, 2, 3])),
+                                  params: params!([1, 2, 3]),
+                                  id: json!(2),
+                              }));
+        // A request with a struct parameter (default: named)
+        one(r#"{"jsonrpc": "2.0", "method": "call", "params": {"x": 2, "y": 7}, "id": 2}"#,
+            &Message::Request(Request {
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: params!(TestParam { x: 2, y: 7 }),
+                                  id: json!(2),
+                              }));
+        // A request with a struct parameter (in positional form)
+        one(r#"{"jsonrpc": "2.0", "method": "call", "params": [2, 7], "id": 2}"#,
+            &Message::Request(Request {
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: params!(pos TestParam { x: 2, y: 7 }),
+                                  id: json!(2),
+                              }));
+        // A request with a literal parameter
+        one(r#"{"jsonrpc": "2.0", "method": "call", "params": [21], "id": 2}"#,
+            &Message::Request(Request {
+                                  jsonrpc: Version,
+                                  method: "call".to_owned(),
+                                  params: params!(21),
                                   id: json!(2),
                               }));
         // A notification (with parameters)
@@ -373,7 +539,7 @@ mod tests {
             &Message::Notification(Notification {
                                        jsonrpc: Version,
                                        method: "notif".to_owned(),
-                                       params: Some(json!({"x": "y"})),
+                                       params: params!({"x": "y"}),
                                    }));
         // A successful response
         one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
@@ -465,7 +631,11 @@ mod tests {
         // A response without an id
         one(r#"{"jsonrpc": "2.0", "result": 42}"#);
         // An extra field
-        one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 42, "others": 43, "id": 2}"#);
+        one(r#"{"jsonrpc": "2.0", "method": "weird", "params": [42], "others": 43, "id": 2}"#);
+        // Some json param that is *not* valid jsonrpc
+        // Valid jsonrpc params are only "not present", an array (positional) or an object (named)
+        // Note: notice that present but `null` is not part of the specification
+        one(r#"{"jsonrpc": "2.0", "method": "weird", "params": 21, "id": 2}"#);
         // Something completely different
         one(r#"{"x": [1, 2, 3]}"#);
 
@@ -481,8 +651,8 @@ mod tests {
     /// Most of it is related to the ids.
     #[test]
     fn constructors() {
-        let msg1 = Message::request("call".to_owned(), Some(json!([1, 2, 3])));
-        let msg2 = Message::request("call".to_owned(), Some(json!([1, 2, 3])));
+        let msg1 = Message::request("call".to_owned(), params!([1, 2, 3]));
+        let msg2 = Message::request("call".to_owned(), params!([1, 2, 3]));
         // They differ, even when created with the same parameters
         assert_ne!(msg1, msg2);
         // And, specifically, they differ in the ID's

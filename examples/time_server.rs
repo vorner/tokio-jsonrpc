@@ -35,7 +35,7 @@ use serde_json::Value;
 use slog::{Drain, Logger};
 use slog_term::{FullFormat, PlainSyncDecorator};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, RpcError, Server, ServerCtl};
+use tokio_jsonrpc::{Endpoint, LineCodec, Params, RpcError, Server, ServerCtl};
 
 /// A helper struct to deserialize the parameters
 #[derive(Deserialize)]
@@ -67,7 +67,7 @@ impl Server for TimeServer {
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
@@ -79,7 +79,9 @@ impl Server for TimeServer {
             "subscribe" => {
                 debug!(self.1, "Subscribing");
                 // Some parsing and bailing out on errors
-                let (s_params,) = jsonrpc_params!(params, "s_params" => SubscribeParams);
+                // XXX: hack until we get jsonrpc_params changed to handle &Option<Params>
+                let params2 = params.clone().map(|x| x.into_value());
+                let (s_params,) = jsonrpc_params!(&params2, "s_params" => SubscribeParams);
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
@@ -92,7 +94,7 @@ impl Server for TimeServer {
                         // And send the notification on each tick (and pass the client through)
                         let notified = interval.fold(client, move |client, _| {
                                 debug!(logger_cloned, "Tick");
-                                client.notify("time".to_owned(), Some(json!([now()])))
+                                client.notify("time".to_owned(), params!([now()]))
                             })
                             // So it can be spawned, spawn needs ().
                             .map(|_| ())

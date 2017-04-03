@@ -62,7 +62,7 @@
 //! # use tokio_core::reactor::Core;
 //! # use tokio_core::net::TcpListener;
 //! # use tokio_io::AsyncRead;
-//! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, RpcError, Endpoint};
+//! # use tokio_jsonrpc::{LineCodec, Server, ServerCtl, Params, RpcError, Endpoint};
 //! # use futures::{Future, Stream};
 //! # use serde_json::Value;
 //! #
@@ -81,7 +81,7 @@
 //!     fn rpc(&self,
 //!            ctl: &ServerCtl,
 //!            method: &str,
-//!            _params: &Option<Value>)
+//!            _params: &Option<Params>)
 //!         -> Option<Self::RpcCallResult> {
 //!         match method {
 //!             // Accept a hello message and finish the greeting
@@ -127,6 +127,7 @@ extern crate slog;
 
 pub mod codec;
 pub mod endpoint;
+#[macro_use]
 pub mod message;
 pub mod server;
 
@@ -134,12 +135,12 @@ pub mod server;
 ///
 /// It isn't for the direct use of the library consumer.
 pub mod macro_exports {
-    pub use serde_json::{Value, from_value};
+    pub use serde_json::{Value, Map, from_value, to_value};
     pub use std::option::Option;
     pub use std::result::Result;
 }
 
 pub use codec::{Boundary as BoundaryCodec, Line as LineCodec};
 pub use endpoint::{Client, Endpoint, ServerCtl};
-pub use message::{Message, Parsed, RpcError};
+pub use message::{Message, Params, Parsed, RpcError};
 pub use server::Server;
