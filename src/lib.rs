@@ -135,7 +135,7 @@ pub mod server;
 ///
 /// It isn't for the direct use of the library consumer.
 pub mod macro_exports {
-    pub use serde_json::{Value, Map, from_value, to_value};
+    pub use serde_json::{Map, Value, from_value, to_value};
     pub use std::option::Option;
     pub use std::result::Result;
 }

@@ -37,14 +37,6 @@ use slog_term::{FullFormat, PlainSyncDecorator};
 
 use tokio_jsonrpc::{Endpoint, LineCodec, Params, RpcError, Server, ServerCtl};
 
-/// A helper struct to deserialize the parameters
-#[derive(Deserialize)]
-struct SubscribeParams {
-    secs: u64,
-    #[serde(default)]
-    nsecs: u32,
-}
-
 /// Number of seconds since epoch
 fn now() -> u64 {
     SystemTime::now()
@@ -79,15 +71,25 @@ impl Server for TimeServer {
             "subscribe" => {
                 debug!(self.1, "Subscribing");
                 // Some parsing and bailing out on errors
-                // XXX: hack until we get jsonrpc_params changed to handle &Option<Params>
-                let params2 = params.clone().map(|x| x.into_value());
-                let (s_params,) = jsonrpc_params!(&params2, "s_params" => SubscribeParams);
+                // XXX: why is params borrowed?
+                let params2 = params.clone();
+                let params = parse_params!(params2, { secs: u64,
+                                                      #[serde(default)]
+                                                      nsecs: u32, });
+                // XXX: this is not happy code
+                //      `impl Carrier` might make it nicer, if/when it lands on stable
+                let params = match params {
+                    /// XXX: this should not be here, we should not return option by default
+                    None => return Some(Err(RpcError::invalid_params(None))),
+                    Some(Err(err)) => return Some(Err(err)),
+                    Some(Ok(params)) => params,
+                };
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
                 let logger = self.1.clone();
                 // Get a stream that „ticks“
-                let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
+                let result = Interval::new(Duration::new(params.secs, params.nsecs), &self.0)
                     .or_else(|e| Err(RpcError::server_error(Some(format!("Interval: {}", e)))))
                     .map(move |interval| {
                         let logger_cloned = logger.clone();

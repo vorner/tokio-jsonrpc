@@ -207,6 +207,231 @@ impl Server for ServerChain {
     }
 }
 
+/// Returns a Result<T, RpcError>
+// TODO: docs missing
+#[macro_export]
+macro_rules! try_parse_params {
+    ($params:expr, $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => Err(RpcError::invalid_params(Some("Expected parameters".to_owned()))),
+                Some(x) => x,
+            }
+        }
+    };
+
+    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
+        parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+    };
+}
+
+/// Will exit the function if the parsing fails
+// TODO: docs missing
+// TODO: add a tokio-jsonrpc-derive that will do similar code for an already
+#[macro_export]
+macro_rules! parse_params {
+    //
+    // internal
+    //
+
+    // terminal rule
+    (@parse [$params:expr, $(#[$attr:meta])*]
+            $members:tt
+            [$($field_name:ident),*]
+            { $(,)* }
+    ) => {
+        {
+            $(#[$attr])*
+            #[derive(Deserialize)]
+            struct X $members
+
+            fn __parse(params: Option<$crate::Params>) -> Option<Result<X, RpcError>> {
+                match params {
+                    Some($crate::Params::Positional(mut xs)) => {
+                        // Turn the positions into a partial object
+                        // We can leverage any #[serde(default)] by letting serde do the work
+                        let mut object = $crate::macro_exports::Map::new();
+
+                        // Review: do we need to allocate an array
+                        //         or can we just use the macro loop?
+                        let fields = vec![$( stringify!($field_name)),*];
+                        for f in fields {
+                            if ! xs.is_empty() {
+                                object.insert(f.into(), xs.remove(0));
+                            }
+                        }
+
+                        let value = $crate::macro_exports::Value::Object(object);
+                        Some($crate::macro_exports
+                            ::from_value::<X>(value)
+                            .map_err(|err|
+                                $crate::message::RpcError::parse_error(format!("{}", err))))
+                    },
+                    Some($crate::Params::Named(x)) => {
+                        let value = $crate::macro_exports::Value::Object(x);
+                        Some($crate::macro_exports
+                            ::from_value::<X>(value)
+                            .map_err(|err|
+                                $crate::message::RpcError::parse_error(format!("{}", err))))
+                    }
+                    None => {
+                        // Review: should we try to parse an object where all fields are missing?
+                        None
+                    }
+                }
+            }
+
+            __parse($params)
+        }
+    };
+    // Parse metadata
+    (@parse $t_:tt
+            { $($members:tt)* }
+            $field_names_:tt
+            { $(#[$attr:meta])+ $($body:tt)* }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* $(#[$attr])+ }
+            $field_names_
+            { $($body)* }
+        }
+    };
+    // Parse member
+    (@parse $t_:tt
+            { $($members:tt)* }
+            [$($field_name:ident),*]
+            { $n:ident: $t:ty, $($body:tt)* }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* pub $n: $t, }
+            [$($field_name,)* $n]
+            { $($body)* }
+        }
+    };
+    // Parse last member
+    (@parse $t_:tt
+            { $($members:tt)* }
+            [$($field_name:ident),*]
+            { $n:ident: $t:ty }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* pub $n: $t, }
+            [$($field_name,)* $n]
+            { }
+        }
+    };
+
+    //
+    // entry points, must come last
+    //
+
+    // Returns an Option<T>
+    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => None
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => Some(params),
+            }
+        }
+    };
+
+    // Returns a T
+    ($params:expr, $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => return Some(Err(RpcError::invalid_params(
+                    Some("Expected parameters".to_owned())))),
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    };
+}
+
+// XXX: do NOT merge this in
+// Trying out some usage cases
+// TODO: turn this usage cases into propper test cases
+#[cfg(test)]
+#[test]
+pub fn foobar_anonymous_structs() {
+    // By position
+    let params = params!([7, "hello world"]);
+    let x = try_parse_params!(params, { x: usize, name: String, }).unwrap();
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, "hello world");
+
+    // By name
+    let params = params!({"x": 7, "name": "hello world"});
+    let x = try_parse_params!(params, { x: usize, name: String, }).unwrap();
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, "hello world");
+
+    println!("cp::1");
+
+    // Missing optional args (named)
+    let params = params!({"x":7});
+    let x = try_parse_params!(params, #[derive(Debug)] { x: usize, name: Option<String>, })
+        .unwrap();
+    println!("{:?}", x);
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, None);
+
+    println!("cp::2");
+
+    // Missing optional args (positional)
+    let params = params!([7]);
+    let x = try_parse_params!(params, #[derive(Debug)] { x: usize, name: Option<String>, })
+        .unwrap();
+    println!("{:?}", x);
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, None);
+
+    println!("cp::3");
+
+    // Nada
+    let params = params!();
+    let x = try_parse_params!(params, option { x: usize, name: Option<String>, });
+    assert!(x.is_none());
+
+    println!("cp::4");
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum Kind {
+        Foo,
+        Bar,
+    }
+
+    impl Default for Kind {
+        fn default() -> Self {
+            Kind::Bar
+        }
+    }
+
+    // Complex parsing with metadata (named)
+    let params = params!({ "x": 8 });
+    let x = try_parse_params!(params, { x: usize,
+                                        #[serde(default)]
+                                        kind: Kind, })
+            .unwrap();
+    assert_eq!(x.x, 8);
+    assert_eq!(x.kind, Kind::Bar);
+
+    println!("cp::5");
+
+    // Complex parsing with metadata (positional)
+    let params = params!([8]);
+    let x = try_parse_params!(params, { x: usize,
+                                        #[serde(default)]
+                                        kind: Kind, })
+            .unwrap();
+    assert_eq!(x.x, 8);
+    assert_eq!(x.kind, Kind::Bar);
+}
+
 // TODO: rename to parse_params / params_parse / from_params
 // TODO: make it expect a `Option<Params>` instead of an `Option<Value>`
 /// Parses the parameters of an RPC or a notification.

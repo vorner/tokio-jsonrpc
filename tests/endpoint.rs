@@ -225,7 +225,7 @@ fn timeout() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         client.call("timeout".to_owned(),
-                    params!([3,0]),
+                    params!([3, 0]),
                     Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| assert!(response.is_none()))
