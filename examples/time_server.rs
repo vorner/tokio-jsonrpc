@@ -13,6 +13,8 @@
 
 #[macro_use]
 extern crate tokio_jsonrpc;
+#[macro_use]
+extern crate tokio_jsonrpc_derive;
 extern crate tokio_core;
 extern crate tokio_io;
 #[macro_use]
@@ -36,6 +38,14 @@ use slog::{Drain, Logger};
 use slog_term::{FullFormat, PlainSyncDecorator};
 
 use tokio_jsonrpc::{Endpoint, LineCodec, Params, RpcError, Server, ServerCtl};
+
+/// A helper struct to deserialize the parameters
+#[derive(Deserialize, Params)]
+struct SubscribeParams {
+    secs: u64,
+    #[serde(default)]
+    nsecs: u32,
+}
 
 /// Number of seconds since epoch
 fn now() -> u64 {
@@ -71,19 +81,7 @@ impl Server for TimeServer {
             "subscribe" => {
                 debug!(self.1, "Subscribing");
                 // Some parsing and bailing out on errors
-                // XXX: why is params borrowed?
-                let params2 = params.clone();
-                let params = parse_params!(params2, { secs: u64,
-                                                      #[serde(default)]
-                                                      nsecs: u32, });
-                // XXX: this is not happy code
-                //      `impl Carrier` might make it nicer, if/when it lands on stable
-                let params = match params {
-                    /// XXX: this should not be here, we should not return option by default
-                    None => return Some(Err(RpcError::invalid_params(None))),
-                    Some(Err(err)) => return Some(Err(err)),
-                    Some(Ok(params)) => params,
-                };
+                let params: SubscribeParams = parse_params!(params.clone());
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
