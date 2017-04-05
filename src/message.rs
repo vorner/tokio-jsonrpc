@@ -145,6 +145,9 @@ macro_rules! params {
             },
             $crate::macro_exports::Value::Array(xs) =>
                 Some($crate::Params::Positional(xs)),
+            // if the object serializes to `Null` map it to `None`
+            $crate::macro_exports::Value::Null => None,
+            // encode any other value as an array of 1 item
             value => Some($crate::Params::Positional(vec![value])),
         }
     };
@@ -157,6 +160,9 @@ macro_rules! params {
                 Some($crate::Params::Named(x)),
             $crate::macro_exports::Value::Array(xs) =>
                 Some($crate::Params::Positional(xs)),
+            // if the object serializes to `Null` map it to `None`
+            $crate::macro_exports::Value::Null => None,
+            // encode any other value as an array of 1 item
             value => Some($crate::Params::Positional(vec![value])),
         }
     };

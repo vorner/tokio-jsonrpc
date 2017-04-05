@@ -207,26 +207,48 @@ impl Server for ServerChain {
     }
 }
 
-/// Returns a Result<T, RpcError>
+pub trait FromParams
+    where Self: Sized
+{
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>>;
+}
+
+/// expands to a Result<T, RpcError> or Option<Result<T, RpcError>>
 // TODO: docs missing
 #[macro_export]
 macro_rules! try_parse_params {
+    // Returns a Option<Result<T, RpcError>>
+    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
+        parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+    };
+
+    // Returns a Result<T, RpcError>
     ($params:expr, $(#[$attr:meta])* { $($body:tt)* }) => {
         {
             let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
             match parsed {
-                None => Err(RpcError::invalid_params(Some("Expected parameters".to_owned()))),
+                None => Err($crate::RpcError::invalid_params(
+                    Some("Expected parameters".to_owned()))),
                 Some(x) => x,
             }
         }
     };
 
-    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
-        parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
-    };
+    // Returns a Result<T, RpcError>
+    ($params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => Err($crate::RpcError::invalid_params(
+                    Some("Expected parameters".to_owned()))),
+                Some(x) => x,
+            }
+        }
+    }
 }
 
 /// Will exit the function if the parsing fails
+/// expands to a T or Option<T>, will `return` with Option<Result<T, RpcError>> on errors
 // TODO: docs missing
 // TODO: add a tokio-jsonrpc-derive that will do similar code for an already
 #[macro_export]
@@ -343,13 +365,65 @@ macro_rules! parse_params {
         {
             let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
             match parsed {
-                None => return Some(Err(RpcError::invalid_params(
-                    Some("Expected parameters".to_owned())))),
+                None => return Some(Err($crate::RpcError::invalid_params(
+                                        Some("Expected parameters".to_owned())))),
                 Some(Err(err)) => return Some(Err(err)),
                 Some(Ok(params)) => params,
             }
         }
     };
+
+    // Returns an Option<T>
+    (option $params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => None
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    };
+
+    // Returns a T
+    ($params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => return Some(Err($crate::RpcError::invalid_params(
+                                        Some("Expected parameters".to_owned())))),
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    }
+}
+
+impl<T> FromParams for Option<T>
+    where T: FromParams
+{
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>> {
+        if params.is_none() {
+            // If `params` is missing it is ok
+            return Some(Ok(None));
+        }
+        let x: Result<T, _> = try_parse_params!(params);
+        match x {
+            Ok(x) => Some(Ok(Some(x))),
+            Err(err) => Some(Err(err)),
+        }
+    }
+}
+
+impl FromParams for () {
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>> {
+        let x = match params {
+            Some(ref params) if params.is_empty() => Ok(()),
+            None => Ok(()),
+            _ => Err(RpcError::invalid_params(Some("Expected no params".to_owned()))),
+        };
+        Some(x)
+    }
 }
 
 // XXX: do NOT merge this in
@@ -397,7 +471,16 @@ pub fn foobar_anonymous_structs() {
     let x = try_parse_params!(params, option { x: usize, name: Option<String>, });
     assert!(x.is_none());
 
-    println!("cp::4");
+    println!("cp::4.1");
+
+    // Unit struct
+    #[derive(Serialize)]
+    struct TheUnit;
+    let params = params!(TheUnit);
+    let x = try_parse_params!(params, option { x: usize, name: Option<String>, });
+    assert!(x.is_none());
+
+    println!("cp::4.2");
 
     #[derive(Debug, Deserialize, PartialEq)]
     enum Kind {
