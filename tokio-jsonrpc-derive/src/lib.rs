@@ -6,6 +6,20 @@ extern crate syn;
 #[macro_use]
 extern crate quote;
 
+mod expand_enum;
+mod expand_newtype;
+mod expand_struct;
+mod expand_tuple;
+mod expand_unit;
+
+use expand_enum::expand_enum;
+use expand_newtype::expand_newtype;
+use expand_struct::expand_struct;
+use expand_tuple::expand_tuple;
+use expand_unit::expand_unit;
+
+use syn::{Attribute, DeriveInput, Ident, MetaItem, NestedMetaItem};
+
 #[proc_macro_derive(Params)]
 pub fn params(input: TokenStream) -> TokenStream {
     let source = input.to_string();
@@ -21,79 +35,65 @@ pub fn params(input: TokenStream) -> TokenStream {
 }
 
 fn expand_params(ast: &syn::DeriveInput) -> quote::Tokens {
-    let fields = match ast.body {
-        syn::Body::Struct(ref data) => data.fields(),
-        syn::Body::Enum(_) => panic!("#[derive(Params)] can only be used with structs"),
-    };
-
-    let fields: Vec<String> = fields.iter()
-        .filter(|x| x.ident.is_some())
-        .map(|x| {
-            format!("{}",
-                    x.ident
-                        .as_ref()
-                        .unwrap())
-        })
-        .collect();
-
-    // Used in the quasi-quotation below as `#name`
-    let name = &ast.ident;
-
-    // Helper is provided for handling complex generic types correctly and effortlessly
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
-
-    let named_body = parse_named();
-    let positional_body = parse_positional(fields);
-
-    quote! {
-        // The generated impl
-        impl #impl_generics ::tokio_jsonrpc::message::FromParams for #name
-            #ty_generics #where_clause
-        {
-            fn from_params(params: Option<::tokio_jsonrpc::Params>)
-                -> Option<Result<#name, ::tokio_jsonrpc::RpcError>>
-            {
-                match params {
-                    Some(::tokio_jsonrpc::Params::Positional(mut xs)) => {
-                        #positional_body
-                    },
-                    Some(::tokio_jsonrpc::Params::Named(x)) => {
-                        #named_body
-                    },
-                    None => {
-                        // Review: should we try to parse an object where all fields are missing?
-                        None
-                    }
-                }
-            }
-        }
+    match ast.body {
+        syn::Body::Struct(syn::VariantData::Struct(_)) => expand_struct(ast),
+        syn::Body::Struct(syn::VariantData::Tuple(ref fields)) if fields.len() == 1 => {
+            expand_newtype(ast)
+        },
+        syn::Body::Struct(syn::VariantData::Tuple(ref fields)) if fields.len() > 1 => {
+            expand_tuple(ast)
+        },
+        syn::Body::Struct(syn::VariantData::Unit) => expand_unit(ast),
+        syn::Body::Enum(_) => expand_enum(ast),
+        _ => unreachable!(),
     }
 }
 
-fn parse_positional(fields: Vec<String>) -> quote::Tokens {
-    quote! {
-        // Turn the positions into a partial object
-        // We can leverage any #[serde(default)] by letting serde do the work
-        let mut object = ::tokio_jsonrpc::macro_exports::Map::new();
+fn null_body(ast: &DeriveInput) -> quote::Tokens {
+    fn is_default(attr: &Attribute) -> bool {
+        if attr.name() != "serde" {
+            return false;
+        }
 
-        #(
-            if ! xs.is_empty() {
-                 object.insert(#fields.to_owned(), xs.remove(0));
+        match attr.value {
+            MetaItem::List(_, ref xs) if xs.len() > 0 => {
+                xs[0] == NestedMetaItem::MetaItem(MetaItem::Word(Ident::new("default")))
+            },
+            _ => false,
+        }
+    }
+    let is_default = ast.attrs
+        .iter()
+        .any(is_default);
+
+    if is_default {
+        let name = &ast.ident;
+
+        quote! {
+            #[derive(Debug, Deserialize)]
+            #[allow(non_camel_case_types)]
+            struct __jsonrpc_params_derive_X {
+                #[serde(default)]
+                x: #name,
             }
-        )*
 
-        let value = ::tokio_jsonrpc::macro_exports::Value::Object(object);
-
-        Some(::tokio_jsonrpc::macro_exports::from_value(value)
-             .map_err(|err| RpcError::parse_error(format!("{}", err))))
-     }
-}
-
-fn parse_named() -> quote::Tokens {
-    quote! {
-        let value = ::tokio_jsonrpc::macro_exports::Value::Object(x);
-        Some(::tokio_jsonrpc::macro_exports::from_value(value)
-             .map_err(|err| ::tokio_jsonrpc::RpcError
-                            ::parse_error(format!("{}", err))))
+            // Try to parse it as if we received no arguments, if we fail DO NOT error
+            let value = ::tokio_jsonrpc::macro_exports::Value::Object(
+                ::tokio_jsonrpc::macro_exports::Map::new()
+            );
+            match ::tokio_jsonrpc::macro_exports::from_value::<__jsonrpc_params_derive_X>(value) {
+                Ok(x) => Some(Ok(x.x)),
+                Err(_) => None,
+            }
+        }
+    } else {
+        quote! {
+            // Try to parse it as if we received no arguments, if we fail DO NOT error
+            let value = ::tokio_jsonrpc::macro_exports::Value::Null;
+            match ::tokio_jsonrpc::macro_exports::from_value(value) {
+                Ok(x) => Some(Ok(x)),
+                Err(_) => None,
+            }
+        }
     }
 }
