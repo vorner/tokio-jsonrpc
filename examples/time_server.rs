@@ -13,6 +13,8 @@
 
 #[macro_use]
 extern crate tokio_jsonrpc;
+#[macro_use]
+extern crate tokio_jsonrpc_derive;
 extern crate tokio_core;
 extern crate tokio_io;
 #[macro_use]
@@ -35,10 +37,10 @@ use serde_json::Value;
 use slog::{Drain, Logger};
 use slog_term::{FullFormat, PlainSyncDecorator};
 
-use tokio_jsonrpc::{Endpoint, LineCodec, RpcError, Server, ServerCtl};
+use tokio_jsonrpc::{Endpoint, LineCodec, Params, RpcError, Server, ServerCtl};
 
 /// A helper struct to deserialize the parameters
-#[derive(Deserialize)]
+#[derive(Deserialize, Params)]
 struct SubscribeParams {
     secs: u64,
     #[serde(default)]
@@ -67,7 +69,7 @@ impl Server for TimeServer {
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
@@ -79,20 +81,20 @@ impl Server for TimeServer {
             "subscribe" => {
                 debug!(self.1, "Subscribing");
                 // Some parsing and bailing out on errors
-                let (s_params,) = jsonrpc_params!(params, "s_params" => SubscribeParams);
+                let params: SubscribeParams = parse_params!(params.clone());
                 // We need to have a client to be able to send notifications
                 let client = ctl.client();
                 let handle = self.0.clone();
                 let logger = self.1.clone();
                 // Get a stream that „ticks“
-                let result = Interval::new(Duration::new(s_params.secs, s_params.nsecs), &self.0)
+                let result = Interval::new(Duration::new(params.secs, params.nsecs), &self.0)
                     .or_else(|e| Err(RpcError::server_error(Some(format!("Interval: {}", e)))))
                     .map(move |interval| {
                         let logger_cloned = logger.clone();
                         // And send the notification on each tick (and pass the client through)
                         let notified = interval.fold(client, move |client, _| {
                                 debug!(logger_cloned, "Tick");
-                                client.notify("time".to_owned(), Some(json!([now()])))
+                                client.notify("time".to_owned(), params!([now()]))
                             })
                             // So it can be spawned, spawn needs ().
                             .map(|_| ())

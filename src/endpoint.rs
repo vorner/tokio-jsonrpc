@@ -31,7 +31,7 @@ use serde_json::{Value, to_value};
 use slog::{Discard, Logger};
 use tokio_core::reactor::{Handle, Timeout};
 
-use message::{Broken, Message, Notification, Parsed, Request, Response, RpcError};
+use message::{Broken, Message, Notification, Params, Parsed, Request, Response, RpcError};
 use server::{Empty as EmptyServer, Server};
 
 /// Thing that terminates the connection once dropped.
@@ -398,7 +398,8 @@ impl Client {
     /// once the message is sent. It yields the Client back (it is blocked for the time of sending)
     /// and another future that resolves once the answer is received (or once a timeout happens, in
     /// which case the result is None).
-    pub fn call(self, method: String, params: Option<Value>, timeout: Option<Duration>) -> RpcSent {
+    pub fn call(self, method: String, params: Option<Params>, timeout: Option<Duration>)
+                -> RpcSent {
         // We have to deconstruct self now, because the sender's send takes ownership for it for a
         // while. We construct it back once the message is passed on.
         let data = self.data;
@@ -469,7 +470,7 @@ impl Client {
     ///
     /// It creates a notification message and sends it. It returs a future that resolves once the
     /// message is sent and yields the client back for further use.
-    pub fn notify(self, method: String, params: Option<Value>) -> Notified {
+    pub fn notify(self, method: String, params: Option<Params>) -> Notified {
         let data = self.data;
         trace!(data.logger, "Sending notification {}", method);
         let future = self.sender
@@ -503,6 +504,7 @@ impl Client {
 /// ```rust,no_run
 /// # extern crate tokio_core;
 /// # extern crate tokio_io;
+/// # #[macro_use]
 /// # extern crate tokio_jsonrpc;
 /// # extern crate futures;
 /// # #[macro_use]
@@ -528,7 +530,7 @@ impl Client {
 ///             .start(&handle);
 ///         // Call a method with some parameters and a 10 seconds timeout
 ///         client.call("request".to_owned(),
-///                     Some(json!(["param1", "param2"])),
+///                     params!(["param1", "param2"]),
 ///                     Some(Duration::new(10, 0)))
 ///             .and_then(|(_client, future_result)| future_result)
 ///             .map(|response| {

@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{Value, to_value};
 
 use endpoint::ServerCtl;
-use message::RpcError;
+use message::{Params, RpcError};
 
 /// The server endpoint.
 ///
@@ -50,7 +50,7 @@ pub trait Server {
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
     /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
     /// regard.
-    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
+    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         None
     }
@@ -63,7 +63,7 @@ pub trait Server {
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
     /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
     /// regard.
-    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
+    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Params>)
                     -> Option<Self::NotificationResult> {
         None
     }
@@ -120,7 +120,7 @@ impl<S: Server> Server for AbstractServer<S> {
     type Success = Value;
     type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         self.0
             .rpc(ctl, method, params)
@@ -133,7 +133,7 @@ impl<S: Server> Server for AbstractServer<S> {
                 Box::new(future)
             })
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
                     -> Option<Self::NotificationResult> {
         // It seems the type signature is computed from inside the closure and it doesn't fit on
         // the outside, so we need to declare it manually :-(
@@ -192,11 +192,11 @@ impl Server for ServerChain {
     type Success = Value;
     type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
            -> Option<Self::RpcCallResult> {
         self.iter_chain(|sub| sub.rpc(ctl, method, params))
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
+    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Params>)
                     -> Option<Self::NotificationResult> {
         self.iter_chain(|sub| sub.notification(ctl, method, params))
     }
@@ -207,6 +207,316 @@ impl Server for ServerChain {
     }
 }
 
+pub trait FromParams
+    where Self: Sized
+{
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>>;
+}
+
+/// expands to a Result<T, RpcError> or Option<Result<T, RpcError>>
+// TODO: docs missing
+#[macro_export]
+macro_rules! try_parse_params {
+    // Returns a Option<Result<T, RpcError>>
+    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
+        parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+    };
+
+    // Returns a Result<T, RpcError>
+    ($params:expr, $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => Err($crate::RpcError::invalid_params(
+                    Some("Expected parameters".to_owned()))),
+                Some(x) => x,
+            }
+        }
+    };
+
+    // Returns a Result<T, RpcError>
+    ($params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => Err($crate::RpcError::invalid_params(
+                    Some("Expected parameters".to_owned()))),
+                Some(x) => x,
+            }
+        }
+    }
+}
+
+/// Will exit the function if the parsing fails
+/// expands to a T or Option<T>, will `return` with Option<Result<T, RpcError>> on errors
+// TODO: docs missing
+// TODO: add a tokio-jsonrpc-derive that will do similar code for an already
+#[macro_export]
+macro_rules! parse_params {
+    //
+    // internal
+    //
+
+    // terminal rule
+    (@parse [$params:expr, $(#[$attr:meta])*]
+            $members:tt
+            [$($field_name:ident),*]
+            { $(,)* }
+    ) => {
+        {
+            $(#[$attr])*
+            #[derive(Deserialize)]
+            struct X $members
+
+            fn __parse(params: Option<$crate::Params>) -> Option<Result<X, RpcError>> {
+                match params {
+                    Some($crate::Params::Positional(mut xs)) => {
+                        // Turn the positions into a partial object
+                        // We can leverage any #[serde(default)] by letting serde do the work
+                        let mut object = $crate::macro_exports::Map::new();
+
+                        // Review: do we need to allocate an array
+                        //         or can we just use the macro loop?
+                        let fields = vec![$( stringify!($field_name)),*];
+                        for f in fields {
+                            if ! xs.is_empty() {
+                                object.insert(f.into(), xs.remove(0));
+                            }
+                        }
+
+                        let value = $crate::macro_exports::Value::Object(object);
+                        Some($crate::macro_exports
+                            ::from_value::<X>(value)
+                            .map_err(|err|
+                                $crate::message::RpcError::parse_error(format!("{}", err))))
+                    },
+                    Some($crate::Params::Named(x)) => {
+                        let value = $crate::macro_exports::Value::Object(x);
+                        Some($crate::macro_exports
+                            ::from_value::<X>(value)
+                            .map_err(|err|
+                                $crate::message::RpcError::parse_error(format!("{}", err))))
+                    }
+                    None => {
+                        // Review: should we try to parse an object where all fields are missing?
+                        None
+                    }
+                }
+            }
+
+            __parse($params)
+        }
+    };
+    // Parse metadata
+    (@parse $t_:tt
+            { $($members:tt)* }
+            $field_names_:tt
+            { $(#[$attr:meta])+ $($body:tt)* }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* $(#[$attr])+ }
+            $field_names_
+            { $($body)* }
+        }
+    };
+    // Parse member
+    (@parse $t_:tt
+            { $($members:tt)* }
+            [$($field_name:ident),*]
+            { $n:ident: $t:ty, $($body:tt)* }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* pub $n: $t, }
+            [$($field_name,)* $n]
+            { $($body)* }
+        }
+    };
+    // Parse last member
+    (@parse $t_:tt
+            { $($members:tt)* }
+            [$($field_name:ident),*]
+            { $n:ident: $t:ty }
+    ) => {
+        parse_params! { @parse $t_
+            { $($members)* pub $n: $t, }
+            [$($field_name,)* $n]
+            { }
+        }
+    };
+
+    //
+    // entry points, must come last
+    //
+
+    // Returns an Option<T>
+    ($params:expr, option $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => None
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => Some(params),
+            }
+        }
+    };
+
+    // Returns a T
+    ($params:expr, $(#[$attr:meta])* { $($body:tt)* }) => {
+        {
+            let parsed = parse_params!(@parse [$params, $(#[$attr])*] {} [] { $($body)* });
+            match parsed {
+                None => return Some(Err($crate::RpcError::invalid_params(
+                                        Some("Expected parameters".to_owned())))),
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    };
+
+    // Returns an Option<T>
+    (option $params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => None
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    };
+
+    // Returns a T
+    ($params:expr) => {
+        {
+            let parsed = $crate::server::FromParams::from_params($params);
+            match parsed {
+                None => return Some(Err($crate::RpcError::invalid_params(
+                                        Some("Expected parameters".to_owned())))),
+                Some(Err(err)) => return Some(Err(err)),
+                Some(Ok(params)) => params,
+            }
+        }
+    }
+}
+
+impl<T> FromParams for Option<T>
+    where T: FromParams
+{
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>> {
+        if params.is_none() {
+            // If `params` is missing it is ok
+            return Some(Ok(None));
+        }
+        let x: Result<T, _> = try_parse_params!(params);
+        match x {
+            Ok(x) => Some(Ok(Some(x))),
+            Err(err) => Some(Err(err)),
+        }
+    }
+}
+
+impl FromParams for () {
+    fn from_params(params: Option<Params>) -> Option<Result<Self, RpcError>> {
+        let x = match params {
+            Some(ref params) if params.is_empty() => Ok(()),
+            None => Ok(()),
+            _ => Err(RpcError::invalid_params(Some("Expected no params".to_owned()))),
+        };
+        Some(x)
+    }
+}
+
+// XXX: do NOT merge this in
+// Trying out some usage cases
+// TODO: turn this usage cases into propper test cases
+#[cfg(test)]
+#[test]
+pub fn foobar_anonymous_structs() {
+    // By position
+    let params = params!([7, "hello world"]);
+    let x = try_parse_params!(params, { x: usize, name: String, }).unwrap();
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, "hello world");
+
+    // By name
+    let params = params!({"x": 7, "name": "hello world"});
+    let x = try_parse_params!(params, { x: usize, name: String, }).unwrap();
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, "hello world");
+
+    println!("cp::1");
+
+    // Missing optional args (named)
+    let params = params!({"x":7});
+    let x = try_parse_params!(params, #[derive(Debug)] { x: usize, name: Option<String>, })
+        .unwrap();
+    println!("{:?}", x);
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, None);
+
+    println!("cp::2");
+
+    // Missing optional args (positional)
+    let params = params!([7]);
+    let x = try_parse_params!(params, #[derive(Debug)] { x: usize, name: Option<String>, })
+        .unwrap();
+    println!("{:?}", x);
+    assert_eq!(x.x, 7);
+    assert_eq!(x.name, None);
+
+    println!("cp::3");
+
+    // Nada
+    let params = params!();
+    let x = try_parse_params!(params, option { x: usize, name: Option<String>, });
+    assert!(x.is_none());
+
+    println!("cp::4.1");
+
+    // Unit struct
+    #[derive(Serialize)]
+    struct TheUnit;
+    let params = params!(TheUnit);
+    let x = try_parse_params!(params, option { x: usize, name: Option<String>, });
+    assert!(x.is_none());
+
+    println!("cp::4.2");
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum Kind {
+        Foo,
+        Bar,
+    }
+
+    impl Default for Kind {
+        fn default() -> Self {
+            Kind::Bar
+        }
+    }
+
+    // Complex parsing with metadata (named)
+    let params = params!({ "x": 8 });
+    let x = try_parse_params!(params, { x: usize,
+                                        #[serde(default)]
+                                        kind: Kind, })
+            .unwrap();
+    assert_eq!(x.x, 8);
+    assert_eq!(x.kind, Kind::Bar);
+
+    println!("cp::5");
+
+    // Complex parsing with metadata (positional)
+    let params = params!([8]);
+    let x = try_parse_params!(params, { x: usize,
+                                        #[serde(default)]
+                                        kind: Kind, })
+            .unwrap();
+    assert_eq!(x.x, 8);
+    assert_eq!(x.kind, Kind::Bar);
+}
+
+// TODO: rename to parse_params / params_parse / from_params
+// TODO: make it expect a `Option<Params>` instead of an `Option<Value>`
 /// Parses the parameters of an RPC or a notification.
 ///
 /// The [`Server`](server/trait.Server.html) receives `&Option<Value>` as the parameters when its
@@ -655,7 +965,7 @@ mod tests {
         type Success = bool;
         type RpcCallResult = Result<bool, RpcError>;
         type NotificationResult = Result<(), ()>;
-        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Params>)
                -> Option<Self::RpcCallResult> {
             self.update(&self.rpc);
             match method {
@@ -666,7 +976,7 @@ mod tests {
                 _ => None,
             }
         }
-        fn notification(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+        fn notification(&self, _ctl: &ServerCtl, method: &str, params: &Option<Params>)
                         -> Option<Self::NotificationResult> {
             self.update(&self.notification);
             assert!(params.is_none());
@@ -717,11 +1027,8 @@ mod tests {
         type Success = usize;
         type RpcCallResult = Result<usize, RpcError>;
         type NotificationResult = Result<(), ()>;
-        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
+        fn rpc(&self, _ctl: &ServerCtl, method: &str, _params: &Option<Params>)
                -> Option<Self::RpcCallResult> {
-            assert!(params.as_ref()
-                        .unwrap()
-                        .is_null());
             match method {
                 "another" => Some(Ok(42)),
                 _ => None,
@@ -750,11 +1057,11 @@ mod tests {
                        .wait()
                        .unwrap());
         assert_eq!(json!(42),
-                   chain.rpc(&ctl, "another", &Some(Value::Null))
+                   chain.rpc(&ctl, "another", &params!(null))
                        .unwrap()
                        .wait()
                        .unwrap());
-        assert!(chain.rpc(&ctl, "wrong", &Some(Value::Null)).is_none());
+        assert!(chain.rpc(&ctl, "wrong", &params!(null)).is_none());
         chain.notification(&ctl, "notification", &None)
             .unwrap()
             .wait()

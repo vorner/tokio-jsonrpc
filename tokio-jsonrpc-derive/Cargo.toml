@@ -1,10 +1,10 @@
 [package]
-name = "tokio-jsonrpc"
+name = "tokio-jsonrpc-derive"
 version = "0.8.0"
 authors = [
     "Michal 'vorner' Vaner <vorner@vorner.cz>",
     "Ignacio Corderi <icorderi@msn.com>"]
-description = "An implementation of JSON RPC 2.0 for tokio"
+description = "Macros 1.1 implementation of #[derive(Params)]"
 documentation = "https://docs.rs/tokio-jsonrpc"
 repository = "https://github.com/vorner/tokio-jsonrpc"
 readme = "README.md"
@@ -16,22 +16,9 @@ license = "Apache-2.0/MIT"
 travis-ci = { repository = "vorner/tokio-jsonrpc" }
 appveyor = { repository = "vorner/tokio-jsonrpc" }
 
+[lib]
+proc-macro = true
+
 [dependencies]
-bytes = "0.4"
-futures = "~0.1.11"
-tokio-core = "0.1"
-tokio-io = "0.1"
-serde = "0.9"
-serde_derive = "0.9"
-serde_json = "0.9"
-uuid = { version = "0.4", features = ["v4"] }
-slog = "~2.0.0-3"
-
-[dev-dependencies]
-slog-term = "~2.0.0-3"
-slog-async = "~2.0.0-3"
-tokio-jsonrpc-derive = { path = "tokio-jsonrpc-derive" }
-
-[workspace]
-members = ["tokio-jsonrpc-derive"]
-
+quote = "0.3"
+syn = "0.11"
