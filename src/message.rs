@@ -55,10 +55,24 @@ impl Params {
         }
     }
 
+    /// Returns a json value consuming the params in the process
     pub fn into_value(self) -> Value {
         match self {
             Params::Positional(xs) => Value::Array(xs),
             Params::Named(x) => Value::Object(x),
+        }
+    }
+
+    /// Force the params to be represented in positional form
+    pub fn into_positional(self) -> Self {
+        match self {
+            Params::Named(x) => {
+                let values = x.into_iter()
+                    .map(|(_, v)| v)
+                    .collect();
+                Params::Positional(values)
+            },
+            x => x,
         }
     }
 }
