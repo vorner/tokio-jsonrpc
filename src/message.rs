@@ -10,8 +10,10 @@
 //! The main entrypoint here is the [Message](enum.Message.html). The others are just building
 //! blocks and you should generally work with `Message` instead.
 
+use std::fmt::{Formatter, Result as FmtResult};
+
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use serde::de::{Deserialize, Deserializer, Error, Unexpected};
+use serde::de::{Deserialize, Deserializer, Error, Unexpected, Visitor};
 use serde_json::{Value, to_value};
 use uuid::Uuid;
 
@@ -24,15 +26,24 @@ impl Serialize for Version {
     }
 }
 
-impl Deserialize for Version {
-    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
-        // The version is actually a string
-        let parsed: String = Deserialize::deserialize(deserializer)?;
-        if parsed == "2.0" {
-            Ok(Version)
-        } else {
-            Err(D::Error::invalid_value(Unexpected::Str(&parsed), &"value 2.0"))
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct VersionVisitor;
+        impl<'de> Visitor<'de> for VersionVisitor {
+            type Value = Version;
+
+            fn expecting(&self, formatter: &mut Formatter) -> FmtResult {
+                formatter.write_str("a version string")
+            }
+
+            fn visit_str<E: Error>(self, value: &str) -> Result<Version, E> {
+                match value {
+                    "2.0" => Ok(Version),
+                    _ => Err(E::invalid_value(Unexpected::Str(value), &"value 2.0")),
+                }
+            }
         }
+        deserializer.deserialize_str(VersionVisitor)
     }
 }
 
@@ -142,7 +153,7 @@ impl Serialize for Response {
 ///
 /// The usual one produces None in that case. But we need to know the difference between
 /// `{x: null}` and `{}`.
-fn some_value<D: Deserializer>(deserializer: D) -> Result<Option<Value>, D::Error> {
+fn some_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Deserialize::deserialize(deserializer).map(Some)
 }
 
@@ -163,9 +174,9 @@ struct WireResponse {
 // Implementing deserialize is hard. We sidestep the difficulty by deserializing a similar
 // structure that directly corresponds to whatever is on the wire and then convert it to our more
 // convenient representation.
-impl Deserialize for Response {
+impl<'de> Deserialize<'de> for Response {
     #[allow(unreachable_code)] // For that unreachable below
-    fn deserialize<D: Deserializer>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wr: WireResponse = Deserialize::deserialize(deserializer)?;
         let result = match (wr.result, wr.error) {
             (Some(res), None) => Ok(res),

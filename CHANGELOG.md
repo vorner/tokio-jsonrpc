@@ -1,3 +1,8 @@
+# 0.8.0
+
+* Bump version of serde to 1.0. This brings the need to bump the version to
+  downstream crates and it changes its API.
+
 # 0.7.3
 
 * Extend the `jsonrpc_params!` macro to allow returning errors instead of early

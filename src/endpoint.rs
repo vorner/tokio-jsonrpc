@@ -42,10 +42,7 @@ struct DropTerminator(Option<OneSender<()>>);
 impl Drop for DropTerminator {
     fn drop(&mut self) {
         // Don't care about the result. If the other side is gone, we just have nothing to do.
-        drop(self.0
-                 .take()
-                 .unwrap()
-                 .send(()));
+        let _ = self.0.take().unwrap().send(());
     }
 }
 
