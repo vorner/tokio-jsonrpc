@@ -1,3 +1,5 @@
+# 0.9.0
+
 * `ServerCtl::client()` returns a result instead of panicking if the connection
   was already terminated. It turns out if the `ServerCtl` is cloned and kept,
   it may have panicked due to external influences.
