@@ -197,7 +197,7 @@ fn wrong_method() {
             .and_then(|(_client, answered)| answered)
             .map(|response| {
                 assert_eq!(RpcError {
-                               code: -32601,
+                               code: -32_601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
                            },
@@ -245,7 +245,7 @@ fn delayed() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         client.call("timeout".to_owned(),
-                    Some(json!([0, 500000000])),
+                    Some(json!([0, 500_000_000])),
                     Some(Duration::new(1, 0)))
             .and_then(|(_client, answered)| answered)
             .map(|response| {
@@ -271,7 +271,7 @@ fn client_only() {
         Endpoint::new(s1, AnotherServer(handle.clone(), Cell::new(2))).start(&handle);
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
-        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+        client.call("timeout".to_owned(), Some(json!([0, 500_000_000])), None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 response.as_ref().unwrap();
@@ -302,7 +302,7 @@ fn parallel() {
         let first_finished = Rc::new(Cell::new(false));
         let first_finished_cloned = first_finished.clone();
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), Some(json!([0, 500_000_000])), None)
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 assert!(response.unwrap()
@@ -316,7 +316,7 @@ fn parallel() {
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 assert_eq!(RpcError {
-                               code: -32601,
+                               code: -32_601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
                            },
@@ -343,7 +343,7 @@ fn seq() {
                               .start(&handle));
         let (client, _client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                     .start(&handle));
-        client.call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+        client.call("timeout".to_owned(), Some(json!([0, 500_000_000])), None)
             .and_then(|(client, answered)| {
                 let first_finished = Rc::new(Cell::new(false));
                 let first_finished_cloned = first_finished.clone();
@@ -351,7 +351,7 @@ fn seq() {
                     .and_then(|(_client, answered)| answered)
                     .map(move |response| {
                         assert_eq!(RpcError {
-                                       code: -32601,
+                                       code: -32_601,
                                        message: "Method not found".to_owned(),
                                        data: Some(json!("wrong")),
                                    },
@@ -393,7 +393,7 @@ fn kill() {
         let (client, client_endpoint_finished) = process_start(Endpoint::client_only(s2)
                                                                    .start(&handle));
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), Some(json!([0, 500_000_000])), None)
             .and_then(|(_client, answered)| answered)
             .then(|response| {
                 // This answer should not arrive, as the connection is killed before
@@ -431,7 +431,7 @@ fn kill_client() {
                                                                    .start(&handle));
         let ctl = client.server_ctl().clone();
         let client1_finished = client.clone()
-            .call("timeout".to_owned(), Some(json!([0, 500000000])), None)
+            .call("timeout".to_owned(), Some(json!([0, 500_000_000])), None)
             .and_then(|(_client, answered)| answered)
             .then(|response| {
                 // This answer should not arrive, as the connection is killed before
@@ -442,7 +442,7 @@ fn kill_client() {
             .and_then(|(_client, answered)| answered)
             .map(move |response| {
                 assert_eq!(RpcError {
-                               code: -32601,
+                               code: -32_601,
                                message: "Method not found".to_owned(),
                                data: Some(json!("wrong")),
                            },
