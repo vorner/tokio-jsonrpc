@@ -14,6 +14,8 @@
 //! simply don't call any RPCs or notifications and forget about the returned
 //! [`Client`](struct.Client.html) structure.
 
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::{self, Error as IoError, ErrorKind};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -65,6 +67,22 @@ struct ServerCtlInternal {
     logger: Logger,
 }
 
+/// An error indicator when a connection has been already terminated.
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AlreadyTerminated;
+
+impl Display for AlreadyTerminated {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "Connection already terminated")
+    }
+}
+
+impl Error for AlreadyTerminated {
+    fn description(&self) -> &str {
+        "Connection already terminated"
+    }
+}
+
 /// A handle to control the server.
 ///
 /// An instance is provided to each [`Server`](../server/trait.Server.html) callback and it can be
@@ -110,21 +128,26 @@ impl ServerCtl {
     /// This is a way in which the server may access the other endpoint (eg. call RPCs or send
     /// notifications to the other side).
     ///
-    /// # Panics
+    /// If the server got terminated by some means (calling `kill`, `terminate`, dropping all
+    /// endpoints or by losing the connection), it returns `Err(AlreadyTerminated)`.
     ///
-    /// If called after `kill` or `terminate` has been called previously.
-    pub fn client(&self) -> Client {
+    /// Note that it's generally safe to `unwrap` the result, unless you clone the `ServerCtl` and
+    /// store it somewhere. If you do clone and keep it, there's a chance for race conditions and
+    /// you should check for the error conditions.
+    pub fn client(&self) -> Result<Client, AlreadyTerminated> {
         let internal = self.0.borrow();
-        Client::new(&internal.idmap,
-                    self,
-                    &internal.handle,
-                    internal.terminator
-                        .as_ref()
-                        .expect("`client` called after termination`"),
-                    internal.sender
-                        .as_ref()
-                        .expect("`client` called after termination"),
-                    internal.logger.clone())
+        let terminator = internal.terminator
+            .as_ref()
+            .ok_or(AlreadyTerminated)?;
+        let sender = internal.sender
+            .as_ref()
+            .ok_or(AlreadyTerminated)?;
+        Ok(Client::new(&internal.idmap,
+            self,
+            &internal.handle,
+            terminator,
+            sender,
+            internal.logger.clone()))
     }
     // This one is for unit tests, not part of the general-purpose API. It creates a dummy
     // ServerCtl that does nothing, but still can be passed to the Server for checking.

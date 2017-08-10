@@ -81,7 +81,7 @@ impl Server for TimeServer {
                 // Some parsing and bailing out on errors
                 let (s_params,) = jsonrpc_params!(params, "s_params" => SubscribeParams);
                 // We need to have a client to be able to send notifications
-                let client = ctl.client();
+                let client = ctl.client().unwrap();
                 let handle = self.0.clone();
                 let logger = self.1.clone();
                 // Get a stream that „ticks“

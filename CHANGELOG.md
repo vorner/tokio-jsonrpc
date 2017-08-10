@@ -1,3 +1,7 @@
+* `ServerCtl::client()` returns a result instead of panicking if the connection
+  was already terminated. It turns out if the `ServerCtl` is cloned and kept,
+  it may have panicked due to external influences.
+
 # 0.8.0
 
 * Bump version of serde to 1.0. This brings the need to bump the version to

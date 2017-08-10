@@ -467,6 +467,7 @@ impl Server for MutualServer {
            -> Option<Self::RpcCallResult> {
         if method == "ask" {
             let result = ctl.client()
+                .unwrap()
                 .notify("terminate".to_owned(), None)
                 .map(|_| Value::Null)
                 .or_else(|e| Err(RpcError::server_error(Some(format!("{}", e)))));
