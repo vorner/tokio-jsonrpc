@@ -5,6 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+#![doc(html_root_url = "https://docs.rs/tokio-jsonrpc/0.8.0/tokio_jsonrpc/")]
+
 //! A JSON RPC protocol for the [tokio](https://tokio.rs) framework.
 //!
 //! This implements the handling of the
