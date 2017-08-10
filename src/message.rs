@@ -102,25 +102,25 @@ impl RpcError {
     }
     /// Create an Invalid Param error.
     pub fn invalid_params(msg: Option<String>) -> Self {
-        RpcError::new(-32602, "Invalid params".to_owned(), msg.map(Value::String))
+        RpcError::new(-32_602, "Invalid params".to_owned(), msg.map(Value::String))
     }
     /// Create a server error.
     pub fn server_error<E: Serialize>(e: Option<E>) -> Self {
-        RpcError::new(-32000,
+        RpcError::new(-32_000,
                       "Server error".to_owned(),
                       e.map(|v| to_value(v).expect("Must be representable in JSON")))
     }
     /// Create an invalid request error.
     pub fn invalid_request() -> Self {
-        RpcError::new(-32600, "Invalid request".to_owned(), None)
+        RpcError::new(-32_600, "Invalid request".to_owned(), None)
     }
     /// Create a parse error.
     pub fn parse_error(e: String) -> Self {
-        RpcError::new(-32700, "Parse error".to_owned(), Some(Value::String(e)))
+        RpcError::new(-32_700, "Parse error".to_owned(), Some(Value::String(e)))
     }
     /// Create a method not found error.
     pub fn method_not_found(method: String) -> Self {
-        RpcError::new(-32601,
+        RpcError::new(-32_601,
                       "Method not found".to_owned(),
                       Some(Value::String(method)))
     }
