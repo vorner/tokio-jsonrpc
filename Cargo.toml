@@ -31,3 +31,4 @@ slog = "~2"
 [dev-dependencies]
 slog-term = "~2"
 slog-async = "~2"
+version-sync = "~0.5"
