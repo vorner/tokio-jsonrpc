@@ -701,14 +701,14 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
                 idmap.clear();
                 match result {
                     Ok(_) => {
-                        debug!(logger_cloned, "Outbount stream ended successfully");
+                        debug!(logger_cloned, "Outbound stream ended successfully");
                         // Don't care about result (the other side simply doesn't care about the
                         // notification on error).
                         drop(error_sender.send(None));
                         Ok(())
                     },
                     Err((e, _select_next)) => {
-                        debug!(logger_cloned, "Outbount stream ended with an error";
+                        debug!(logger_cloned, "Outbound stream ended with an error";
                                "error" => format!("{}", e));
                         // Don't care about result (the other side simply doesn't care about the
                         // notification on error).
