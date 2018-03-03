@@ -18,7 +18,6 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use futures::{Future, IntoFuture, Stream};
-use futures::future::BoxFuture;
 use tokio_core::reactor::{Core, Handle, Timeout};
 use tokio_core::net::{TcpListener, TcpStream};
 use tokio_io::codec::Framed;
@@ -149,7 +148,7 @@ struct AnotherServer(Handle, Cell<usize>);
 /// It terminates after receiving .1 requests.
 impl Server for AnotherServer {
     type Success = bool;
-    type RpcCallResult = BoxFuture<bool, RpcError>;
+    type RpcCallResult = Box<Future<Item = bool, Error = RpcError>>;
     type NotificationResult = Result<(), ()>;
     fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
            -> Option<Self::RpcCallResult> {
@@ -167,12 +166,11 @@ impl Server for AnotherServer {
             let timeout = Timeout::new(Duration::new(params[0], params[1] as u32), &self.0)
                 .unwrap()
                 .map(|_| true)
-                .or_else(|e| Err(RpcError::server_error(Some(format!("{}", e)))))
-                .boxed();
-            Some(timeout)
+                .or_else(|e| Err(RpcError::server_error(Some(format!("{}", e)))));
+            Some(Box::new(timeout))
         } else if method == "kill" {
             ctl.kill();
-            Some(Ok(true).into_future().boxed())
+            Some(Box::new(Ok(true).into_future()))
         } else {
             None
         }

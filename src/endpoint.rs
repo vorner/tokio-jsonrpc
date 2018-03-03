@@ -186,22 +186,6 @@ type BoxStream<T, E> = Box<Stream<Item = T, Error = E>>;
 // None in error means end the stream, please
 type FutureMessageStream = BoxStream<FutureMessage, IoError>;
 
-/// Box the stream as a trait object in test.
-///
-/// Due to the compiler bug #38528, the compilation takes a long time with complex types ‒ like
-/// long chains of future modifiers. So we turn some of them into trait objects and split the
-/// chain. It should be removed once the bug is fixed. Also, it does nothing on release build.
-#[cfg(debug_assertions)]
-fn test_boxed<T, E, S>(s: S) -> Box<Stream<Item = T, Error = E>>
-    where S: Stream<Item = T, Error = E> + 'static
-{
-    Box::new(s)
-}
-#[cfg(not(debug_assertions))]
-fn test_boxed<S>(s: S) -> S {
-    s
-}
-
 type IDMap = Rc<RefCell<HashMap<String, OneSender<Response>>>>;
 
 // A future::stream::once that takes only the success value, for convenience.
@@ -302,7 +286,7 @@ fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, id
         })
         .collect();
     // We make it into a stream of streams and flatten it to get one big stream
-    let subs_stream = stream::iter(small_streams).flatten();
+    let subs_stream = stream::iter_result(small_streams).flatten();
     // Once all the results are produced, wrap them into a batch and return that one
     let collected = receiver.collect()
         .map_err(shouldnt_happen)
@@ -349,7 +333,7 @@ fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idma
     } else {
         match msg {
             Err(broken) => {
-                let err: FutureMessage = Ok(Some(broken.reply())).into_future().boxed();
+                let err: FutureMessage = Box::new(Ok(Some(broken.reply())).into_future());
                 Box::new(once(err))
             },
             Ok(Message::Request(req)) => Box::new(once(do_request(server, ctl, req, logger))),
@@ -408,7 +392,7 @@ impl Client {
                 ctl: ctl.clone(),
                 handle: handle.clone(),
                 terminator: terminator.clone(),
-                logger: logger,
+                logger,
             },
         }
     }
@@ -478,8 +462,8 @@ impl Client {
             .map_err(shouldnt_happen)
             .map(move |sender| {
                 let client = Client {
-                    sender: sender,
-                    data: data,
+                    sender,
+                    data,
                 };
                 (client, completed)
             });
@@ -497,8 +481,8 @@ impl Client {
             .map_err(shouldnt_happen)
             .map(move |sender| {
                 Client {
-                    sender: sender,
-                    data: data,
+                    sender,
+                    data,
                 }
             });
         Box::new(future)
@@ -581,8 +565,8 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     /// Pass it the connection to build the endpoint on and the server to use internally.
     pub fn new(connection: Connection, server: RpcServer) -> Self {
         Endpoint {
-            connection: connection,
-            server: server,
+            connection,
+            server,
             parallel: 1,
             logger: Logger::root(Discard, o!()),
         }
@@ -597,7 +581,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     /// and is par single client. The client doesn't limit the amount of sent requests in any way,
     /// since it can be easily managed by the caller.
     pub fn parallel(self, parallel: usize) -> Self {
-        Endpoint { parallel: parallel, ..self }
+        Endpoint { parallel, ..self }
     }
     /// Sets the logger used by the endpoint.
     ///
@@ -605,7 +589,7 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
     /// logging various messages. The logger is used verbatim ‒ if you want the endpoint to use a
     /// child logger, inherit it on your side.
     pub fn logger(self, logger: Logger) -> Self {
-        Endpoint { logger: logger, ..self }
+        Endpoint { logger, ..self }
     }
     /// Start the endpoint.
     ///
@@ -674,17 +658,13 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let answers = stream.map(Some)
             .chain(cleaner)
             .select(terminator)
-            .take_while(|m| Ok(m.is_some()));
-        // A trick to split the long chain of modifiers to speed up compilation ‒ see the comment
-        // at test_boxed
-        let answers = test_boxed(answers);
-        let answers = answers.map(move |parsed| {
+            .take_while(|m| Ok(m.is_some()))
+            .map(move |parsed| {
                 do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap())
             })
             .flatten()
             .buffer_unordered(self.parallel)
             .filter_map(|message| message);
-        let answers = test_boxed(answers);
         let logger_cloned = logger.clone();
         // Take both the client RPCs and the answers
         let outbound = answers.select(receiver.map_err(shouldnt_happen));

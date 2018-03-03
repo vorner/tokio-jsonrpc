@@ -95,9 +95,9 @@ impl RpcError {
     /// Mostly for completeness, doesn't do anything but filling in the corresponding fields.
     pub fn new(code: i64, message: String, data: Option<Value>) -> Self {
         RpcError {
-            code: code,
-            message: message,
-            data: data,
+            code,
+            message,
+            data,
         }
     }
     /// Create an Invalid Param error.
@@ -188,7 +188,7 @@ impl<'de> Deserialize<'de> for Response {
         };
         Ok(Response {
                jsonrpc: Version,
-               result: result,
+               result,
                id: wr.id,
            })
     }
@@ -249,8 +249,8 @@ impl Message {
     pub fn request(method: String, params: Option<Value>) -> Self {
         Message::Request(Request {
                              jsonrpc: Version,
-                             method: method,
-                             params: params,
+                             method,
+                             params,
                              id: Value::String(Uuid::new_v4().hyphenated().to_string()),
                          })
     }
@@ -266,8 +266,8 @@ impl Message {
     pub fn notification(method: String, params: Option<Value>) -> Self {
         Message::Notification(Notification {
                                   jsonrpc: Version,
-                                  method: method,
-                                  params: params,
+                                  method,
+                                  params,
                               })
     }
 }
