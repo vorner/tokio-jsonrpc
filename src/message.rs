@@ -14,7 +14,7 @@ use std::fmt::{Formatter, Result as FmtResult};
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde::de::{Deserialize, Deserializer, Error, Unexpected, Visitor};
-use serde_json::{to_value, Value};
+use serde_json::{to_value, Result as JsonResult, Value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -305,9 +305,18 @@ impl Broken {
 /// A trick to easily deserialize and detect valid JSON, but invalid Message.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum WireMessage {
+pub(crate) enum WireMessage {
     Message(Message),
     Broken(Broken),
+}
+
+pub(crate) fn decoded_to_parsed(res: JsonResult<WireMessage>) -> Parsed {
+    match res {
+        Ok(WireMessage::Message(Message::UnmatchedSub(value))) => Err(Broken::Unmatched(value)),
+        Ok(WireMessage::Message(m)) => Ok(m),
+        Ok(WireMessage::Broken(b)) => Err(b),
+        Err(e) => Err(Broken::SyntaxError(format!("{}", e))),
+    }
 }
 
 pub type Parsed = Result<Message, Broken>;
@@ -316,13 +325,7 @@ pub type Parsed = Result<Message, Broken>;
 ///
 /// Invalid JSON or JSONRPC messages are reported as [Broken](enum.Broken.html).
 pub fn from_slice(s: &[u8]) -> Parsed {
-    match ::serde_json::de::from_slice(s) {
-        Ok(WireMessage::Message(Message::UnmatchedSub(value))) => Err(Broken::Unmatched(value)),
-        Ok(WireMessage::Message(m)) => Ok(m),
-        Ok(WireMessage::Broken(b)) => Err(b),
-        // Other errors can't happen right now, when we have the slice
-        Err(e) => Err(Broken::SyntaxError(format!("{}", e))),
-    }
+    decoded_to_parsed(::serde_json::de::from_slice(s))
 }
 
 /// Read a [Message](enum.Message.html) from a string.

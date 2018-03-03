@@ -1,3 +1,8 @@
+# 0.9.1
+
+* The `Boundary` codec is implemented, to allow decoding stream of non-separated
+  JSON messages.
+
 # 0.9.0
 
 * `ServerCtl::client()` returns a result instead of panicking if the connection
@@ -18,7 +23,8 @@
 
 # 0.7.2
 
-* Extention of the `jsonrpc_params!` macro to allow returning errors instead of early exit.
+* Extention of the `jsonrpc_params!` macro to allow returning errors instead of
+  early exit.
 
 # 0.7.1
 

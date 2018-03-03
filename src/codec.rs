@@ -17,10 +17,11 @@ use std::io::{Error, ErrorKind, Result as IoResult};
 
 use tokio_io::codec::{Decoder, Encoder};
 use bytes::{BufMut, BytesMut};
+use serde_json::de::Deserializer;
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
-use message::{from_slice, from_str, Message, Parsed};
+use message::{decoded_to_parsed, from_slice, from_str, Message, Parsed};
 
 /// A helper to wrap the error
 fn err_map(e: SerdeError) -> Error {
@@ -32,7 +33,7 @@ trait PositionCache {
     fn position(&mut self) -> &mut usize;
 }
 
-/// An encoding function reused by `Line` and `DirtyLine`
+/// An encoding function reused by [`Line`], [`DirtyLine`] and [`Boundary`]
 fn encode_codec(msg: &Message, buf: &mut BytesMut) -> IoResult<()> {
     let encoded = to_vec(&msg).map_err(err_map)?;
     // As discovered the hard way, we must not overwrite buf, but append to it.
@@ -152,9 +153,34 @@ impl Encoder for DirtyLine {
 /// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object
 /// boundaries, so it works with both newline-separated and object-separated encoding. It produces
 /// newline-separated stream, which is more generic.
-///
-/// TODO: This is not implemented yet.
 pub struct Boundary;
+
+impl Encoder for Boundary {
+    type Item = Message;
+    type Error = Error;
+    fn encode(&mut self, msg: Message, buf: &mut BytesMut) -> IoResult<()> {
+        encode_codec(&msg, buf)
+    }
+}
+
+impl Decoder for Boundary {
+    type Item = Parsed;
+    type Error = Error;
+    fn decode(&mut self, src: &mut BytesMut) -> IoResult<Option<Parsed>> {
+        let (decoded, pos) = {
+            let mut deserializer = Deserializer::from_slice(src).into_iter();
+            let decoded = deserializer.next().and_then(|result| match result {
+                Err(ref e) if e.is_eof() => None,
+                other => Some(decoded_to_parsed(other)),
+            });
+            (decoded, deserializer.byte_offset())
+        };
+
+        // It did read some data from the input. Find out how many and cut them off.
+        src.split_to(pos);
+        Ok(decoded)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -240,5 +266,26 @@ mod tests {
             result,
             Some(Ok(Message::notification("Hello �World".to_owned(), None)))
         );
+    }
+
+    /// Not enough data for a whole message
+    #[test]
+    fn decode_boundary_short() {
+        let mut buf = get_buf(b"{\"jsonrpc\":\"");
+        assert!(Boundary.decode(&mut buf).unwrap().is_none());
+        assert_eq!(&buf, &b"{\"jsonrpc\":\""[..]);
+    }
+
+    /// There's more than one message, but not two.
+    ///
+    /// And they are not separated by whitespace (to test the boundary decoding).
+    #[test]
+    fn decode_boundary_prefix() {
+        let mut buf = get_buf(b"\n\n {\"jsonrpc\":\"2.0\",\"method\":\"notif\"}{\"");
+        assert_eq!(
+            Boundary.decode(&mut buf).unwrap().unwrap(),
+            Ok(Message::notification("notif".to_owned(), None))
+        );
+        assert_eq!(&buf, &b"{\""[..]);
     }
 }

@@ -4,6 +4,5 @@
 • Batches on the client side
 • Some high-level description how it works, on the docs front page.
 • Go through the documentation and use third form everywhere (eg. „returns“ instead of „return“)
-• BoundaryCodec can now be implemented, serde-json now provides error details
 • Document panics around returning un-jsonizable types
 • Omit travis and similar things from the crate bundle
