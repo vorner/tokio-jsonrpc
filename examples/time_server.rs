@@ -11,18 +11,18 @@
 //! unix timestamp (number of seconds since 1.1. 1970). You can also subscribe to periodic time
 //! updates.
 
-#[macro_use]
-extern crate tokio_jsonrpc;
-extern crate tokio_core;
-extern crate tokio_io;
+extern crate futures;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate serde_json;
-extern crate futures;
 #[macro_use]
 extern crate slog;
 extern crate slog_term;
+extern crate tokio_core;
+extern crate tokio_io;
+#[macro_use]
+extern crate tokio_jsonrpc;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::io;
@@ -67,8 +67,9 @@ impl Server for TimeServer {
     /// Just a formality, we don't need this one
     type NotificationResult = Result<(), ()>;
     /// The actual implementation of the RPC methods
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RpcCallResult> {
+    fn rpc(
+        &self, ctl: &ServerCtl, method: &str, params: &Option<Value>
+    ) -> Option<Self::RpcCallResult> {
         match method {
             // Return the number of seconds since epoch (eg. unix timestamp)
             "now" => {
@@ -124,24 +125,27 @@ fn main() {
     let handle = core.handle();
 
     let listener = TcpListener::bind(&"127.0.0.1:2345".parse().unwrap(), &handle).unwrap();
-    let service = listener.incoming()
-        .for_each(move |(connection, addr)| {
-            let addr = format!("{}", addr);
-            // Once a connection is made, create an endpoint on it, using the above server
-            let (_client, finished) = Endpoint::new(connection.framed(LineCodec::new()),
-                                                    TimeServer(handle.clone(),
-                                                               logger.new(o!("cli" => addr.clone(),
-                                                                             "context" => "time"))))
-                    .logger(logger.new(o!("cli" => addr.clone(), "context" => "json RPC")))
-                    .start(&handle);
-            // If it finishes with an error, report it
-            let logger = logger.clone();
-            let err_report =
-                finished.map_err(move |e| error!(logger, "Problem on client {}: {}", addr, e));
-            handle.spawn(err_report);
-            // Just so the for_each is happy, nobody actually uses this
-            Ok(())
-        });
+    let service = listener.incoming().for_each(move |(connection, addr)| {
+        let addr = format!("{}", addr);
+        // Once a connection is made, create an endpoint on it, using the above server
+        let (_client, finished) =
+            Endpoint::new(
+                connection.framed(LineCodec::new()),
+                TimeServer(
+                    handle.clone(),
+                    logger.new(o!("cli" => addr.clone(),
+                                                                             "context" => "time")),
+                ),
+            ).logger(logger.new(o!("cli" => addr.clone(), "context" => "json RPC")))
+                .start(&handle);
+        // If it finishes with an error, report it
+        let logger = logger.clone();
+        let err_report =
+            finished.map_err(move |e| error!(logger, "Problem on client {}: {}", addr, e));
+        handle.spawn(err_report);
+        // Just so the for_each is happy, nobody actually uses this
+        Ok(())
+    });
     // Run the whole thing
     core.run(service).unwrap();
 }

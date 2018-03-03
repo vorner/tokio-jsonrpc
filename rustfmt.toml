@@ -1,11 +1,6 @@
 verbose = true
 fn_args_density = "Compressed"
-struct_trailing_comma = "Always"
 match_block_trailing_comma = true
-match_wildcard_trailing_comma = true
 use_try_shorthand = true
 write_mode = "Diff"
-closure_block_indent_threshold = 1
-take_source_hints = true
 reorder_imported_names = true
-chain_one_line_max = 3

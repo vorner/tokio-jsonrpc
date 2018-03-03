@@ -7,12 +7,12 @@
 
 // TODO: Some comments explaining what is happening
 
-extern crate tokio_jsonrpc;
+extern crate futures;
 #[macro_use]
 extern crate serde_json;
-extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
+extern crate tokio_jsonrpc;
 
 use futures::{Future, Sink, Stream};
 use tokio_core::reactor::Core;

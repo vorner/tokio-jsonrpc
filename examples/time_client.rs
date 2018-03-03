@@ -11,16 +11,15 @@
 //! It will inovoke the "now" method, which will return the current
 //! unix timestamp (number of seconds since 1.1. 1970).
 
-extern crate tokio_jsonrpc;
-extern crate tokio_core;
-extern crate tokio_io;
-extern crate serde_json;
 extern crate futures;
+extern crate serde_json;
 #[macro_use]
 extern crate slog;
-extern crate slog_term;
 extern crate slog_async;
-
+extern crate slog_term;
+extern crate tokio_core;
+extern crate tokio_io;
+extern crate tokio_jsonrpc;
 
 use std::time::Duration;
 
@@ -49,28 +48,32 @@ fn main() {
     let socket = TcpStream::connect(&"127.0.0.1:2345".parse().unwrap(), &handle);
 
     let client = socket.and_then(|socket| {
-
         // Create a client endpoint
         let (client, _) = Endpoint::client_only(socket.framed(LineCodec::new()))
             .logger(logger.new(o!("client" => 1)))
             .start(&handle);
 
         info!(logger, "Calling rpc");
-        client.call("now".to_owned(), None, Some(Duration::from_secs(5)))
+        client
+            .call("now".to_owned(), None, Some(Duration::from_secs(5)))
             .and_then(|(_client, response)| response)
             .map(|x| match x {
-                     // Received an error from the server,
-                     Some(Response { result: Ok(result), .. }) => {
-                let r: u64 = serde_json::from_value(result).unwrap();
-                info!(logger, "received response"; "result" => format!("{:?}", r));
-            },
-                     // Received an error from the server,
-                     Some(Response { result: Err(err), .. }) => {
-                info!(logger, "remote error"; "error" => format!("{:?}", err));
-            },
-                     // Timeout
-                     None => info!(logger, "timeout"),
-                 })
+                // Received an error from the server,
+                Some(Response {
+                    result: Ok(result), ..
+                }) => {
+                    let r: u64 = serde_json::from_value(result).unwrap();
+                    info!(logger, "received response"; "result" => format!("{:?}", r));
+                },
+                // Received an error from the server,
+                Some(Response {
+                    result: Err(err), ..
+                }) => {
+                    info!(logger, "remote error"; "error" => format!("{:?}", err));
+                },
+                // Timeout
+                None => info!(logger, "timeout"),
+            })
     });
 
     // Run the whole thing

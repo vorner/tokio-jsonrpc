@@ -115,17 +115,17 @@
 
 extern crate serde;
 // We use the json! macro only in the tests
+extern crate bytes;
+extern crate futures;
+#[macro_use]
+extern crate serde_derive;
 #[cfg_attr(test, macro_use)]
 extern crate serde_json;
 #[macro_use]
-extern crate serde_derive;
-extern crate uuid;
-extern crate bytes;
+extern crate slog;
 extern crate tokio_core;
 extern crate tokio_io;
-extern crate futures;
-#[macro_use]
-extern crate slog;
+extern crate uuid;
 
 pub mod codec;
 pub mod endpoint;
@@ -136,7 +136,7 @@ pub mod server;
 ///
 /// It isn't for the direct use of the library consumer.
 pub mod macro_exports {
-    pub use serde_json::{Value, from_value};
+    pub use serde_json::{from_value, Value};
     pub use std::option::Option;
     pub use std::result::Result;
 }

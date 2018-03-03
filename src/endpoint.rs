@@ -24,12 +24,12 @@ use std::cell::RefCell;
 
 use futures::{Future, IntoFuture, Sink, Stream};
 use futures::future::Either;
-use futures::stream::{self, Once, empty, unfold};
-use futures::unsync::mpsc::{Sender, channel};
-use futures::unsync::oneshot::{Sender as OneSender, channel as one_channel};
+use futures::stream::{self, empty, unfold, Once};
+use futures::unsync::mpsc::{channel, Sender};
+use futures::unsync::oneshot::{channel as one_channel, Sender as OneSender};
 #[cfg(test)]
 use futures::unsync::oneshot::Receiver as OneReceiver;
-use serde_json::{Value, to_value};
+use serde_json::{to_value, Value};
 use slog::{Discard, Logger};
 use tokio_core::reactor::{Handle, Timeout};
 
@@ -118,9 +118,7 @@ impl ServerCtl {
     pub fn kill(&self) {
         self.cleanup(|internal| {
             // The option might be None, but only after we called it already.
-            internal.killer
-                .take()
-                .map(|s| s.send(()));
+            internal.killer.take().map(|s| s.send(()));
         });
     }
     /// Create a new client for the current endpoint.
@@ -136,18 +134,16 @@ impl ServerCtl {
     /// you should check for the error conditions.
     pub fn client(&self) -> Result<Client, AlreadyTerminated> {
         let internal = self.0.borrow();
-        let terminator = internal.terminator
-            .as_ref()
-            .ok_or(AlreadyTerminated)?;
-        let sender = internal.sender
-            .as_ref()
-            .ok_or(AlreadyTerminated)?;
-        Ok(Client::new(&internal.idmap,
+        let terminator = internal.terminator.as_ref().ok_or(AlreadyTerminated)?;
+        let sender = internal.sender.as_ref().ok_or(AlreadyTerminated)?;
+        Ok(Client::new(
+            &internal.idmap,
             self,
             &internal.handle,
             terminator,
             sender,
-            internal.logger.clone()))
+            internal.logger.clone(),
+        ))
     }
     // This one is for unit tests, not part of the general-purpose API. It creates a dummy
     // ServerCtl that does nothing, but still can be passed to the Server for checking.
@@ -167,14 +163,14 @@ impl ServerCtl {
         let handle = core.handle();
 
         let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-                                                     stop: false,
-                                                     terminator: Some(Rc::new(terminator)),
-                                                     killer: Some(kill_sender),
-                                                     idmap: Default::default(),
-                                                     handle: handle,
-                                                     sender: Some(msg_sender),
-                                                     logger: Logger::root(Discard, o!()),
-                                                 })));
+            stop: false,
+            terminator: Some(Rc::new(terminator)),
+            killer: Some(kill_sender),
+            idmap: Default::default(),
+            handle: handle,
+            sender: Some(msg_sender),
+            logger: Logger::root(Discard, o!()),
+        })));
         (ctl, drop_receiver, kill_receiver)
     }
 }
@@ -197,9 +193,9 @@ fn shouldnt_happen<E>(_: E) -> IoError {
     IoError::new(ErrorKind::Other, "Shouldn't happen")
 }
 
-fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, request: Request,
-                                           logger: &Logger)
-                                           -> FutureMessage {
+fn do_request<RpcServer: Server + 'static>(
+    server: &RpcServer, ctl: &ServerCtl, request: Request, logger: &Logger
+) -> FutureMessage {
     match server.rpc(ctl, &request.method, &request.params) {
         None => {
             trace!(logger, "Server refused RPC {}", request.method);
@@ -208,33 +204,36 @@ fn do_request<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, 
         },
         Some(future) => {
             trace!(logger, "Server accepted RPC {}", request.method);
-            let result = future.into_future()
-                .then(move |result| match result {
-                          Err(err) => Ok(Some(request.error(err))),
-                          Ok(result) => {
-                              Ok(Some(request.reply(to_value(result).expect("Bad result type"))))
-                          },
-                      });
+            let result = future.into_future().then(move |result| match result {
+                Err(err) => Ok(Some(request.error(err))),
+                Ok(result) => Ok(Some(
+                    request.reply(to_value(result).expect("Bad result type")),
+                )),
+            });
             Box::new(result)
         },
     }
 }
 
-fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
-                                      notification: &Notification, logger: &Logger)
-                                      -> FutureMessage {
+fn do_notification<RpcServer: Server>(
+    server: &RpcServer, ctl: &ServerCtl, notification: &Notification, logger: &Logger
+) -> FutureMessage {
     match server.notification(ctl, &notification.method, &notification.params) {
         None => {
-            trace!(logger,
-                   "Server refused notification {}",
-                   notification.method);
+            trace!(
+                logger,
+                "Server refused notification {}",
+                notification.method
+            );
             Box::new(Ok(None).into_future())
         },
         // We ignore both success and error, so we convert it into something for now
         Some(future) => {
-            trace!(logger,
-                   "Server accepted notification {}",
-                   notification.method);
+            trace!(
+                logger,
+                "Server accepted notification {}",
+                notification.method
+            );
             Box::new(future.into_future().then(|_| Ok(None)))
         },
     }
@@ -244,9 +243,9 @@ fn do_notification<RpcServer: Server>(server: &RpcServer, ctl: &ServerCtl,
 // stream of the computations which return nothing, but gather the results. Then we add yet another
 // future at the end of that stream that takes the gathered results and wraps them into the real
 // message ‒ the result of the whole batch.
-fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
-                                         logger: &Logger, msg: Vec<Message>)
-                                         -> FutureMessageStream {
+fn do_batch<RpcServer: Server + 'static>(
+    server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap, logger: &Logger, msg: Vec<Message>
+) -> FutureMessageStream {
     // Create a large enough channel. We may be unable to pick up the results until the final
     // future gets its turn, so shorter one could lead to a deadlock.
     let (sender, receiver) = channel(msg.len());
@@ -268,41 +267,41 @@ fn do_batch<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, id
             // Also, it is a bit unfortunate how we need to allocate so many times here. We may try
             // doing something about that in the future, but without implementing custom future and
             // stream types, this seems the best we can do.
-            let all_sent = do_msg(server, ctl, idmap, logger, Ok(sub))
-                .and_then(move |future_message| -> Result<FutureMessage, _> {
+            let all_sent = do_msg(server, ctl, idmap, logger, Ok(sub)).and_then(
+                move |future_message| -> Result<FutureMessage, _> {
                     let sender = sender.clone();
                     let msg_sent =
                         future_message.and_then(move |response: Option<Message>| match response {
-                                                    None => Either::A(Ok(None).into_future()),
-                                                    Some(msg) => {
-                                                        Either::B(sender.send(msg)
-                                                                      .map_err(shouldnt_happen)
-                                                                      .map(|_| None))
-                                                    },
-                                                });
+                            None => Either::A(Ok(None).into_future()),
+                            Some(msg) => {
+                                Either::B(sender.send(msg).map_err(shouldnt_happen).map(|_| None))
+                            },
+                        });
                     Ok(Box::new(msg_sent))
-                });
+                },
+            );
             Ok(all_sent)
         })
         .collect();
     // We make it into a stream of streams and flatten it to get one big stream
     let subs_stream = stream::iter_result(small_streams).flatten();
     // Once all the results are produced, wrap them into a batch and return that one
-    let collected = receiver.collect()
-        .map_err(shouldnt_happen)
-        .map(|results| if results.is_empty() {
-                 // The spec says to send nothing at all if there are no results
-                 None
-             } else {
-                 Some(Message::Batch(results))
-             });
+    let collected = receiver.collect().map_err(shouldnt_happen).map(|results| {
+        if results.is_empty() {
+            // The spec says to send nothing at all if there are no results
+            None
+        } else {
+            Some(Message::Batch(results))
+        }
+    });
     let streamed: Once<FutureMessage, _> = once(Box::new(collected));
     // Connect the wrapping single-item stream after the work stream
     Box::new(subs_stream.chain(streamed))
 }
 
 fn do_response(idmap: &IDMap, logger: &Logger, response: Response) -> FutureMessageStream {
-    let maybe_sender = response.id
+    let maybe_sender = response
+        .id
         .as_str()
         .and_then(|id| idmap.borrow_mut().remove(id));
     if let Some(sender) = maybe_sender {
@@ -318,12 +317,10 @@ fn do_response(idmap: &IDMap, logger: &Logger, response: Response) -> FutureMess
 
 // Handle single message and turn it into an arbitrary number of futures that may be worked on in
 // parallel, but only at most one of which returns a response message
-fn do_msg<RpcServer: Server + 'static>(server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap,
-                                       logger: &Logger, msg: Parsed)
-                                       -> FutureMessageStream {
-    let terminated = ctl.0
-        .borrow()
-        .stop;
+fn do_msg<RpcServer: Server + 'static>(
+    server: &RpcServer, ctl: &ServerCtl, idmap: &IDMap, logger: &Logger, msg: Parsed
+) -> FutureMessageStream {
+    let terminated = ctl.0.borrow().stop;
     trace!(logger, "Do a message"; "terminated" => terminated, "message" => format!("{:?}", msg));
     if terminated {
         if let Ok(Message::Response(response)) = msg {
@@ -381,9 +378,10 @@ pub type RpcSent = BoxFuture<(Client, RpcFinished), IoError>;
 
 impl Client {
     /// A constructor (a private one).
-    fn new(idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop,
-           sender: &Sender<Message>, logger: Logger)
-           -> Self {
+    fn new(
+        idmap: &IDMap, ctl: &ServerCtl, handle: &Handle, terminator: &RcDrop,
+        sender: &Sender<Message>, logger: Logger,
+    ) -> Self {
         debug!(logger, "Creating a new client");
         Client {
             sender: sender.clone(),
@@ -409,13 +407,17 @@ impl Client {
         trace!(data.logger, "Calling RPC {}", method);
         let msg = Message::request(method, params);
         let id = match msg {
-            Message::Request(Request { id: Value::String(ref id), .. }) => id.clone(),
+            Message::Request(Request {
+                id: Value::String(ref id),
+                ..
+            }) => id.clone(),
             _ => unreachable!("We produce only string IDs"),
         };
         let (sender, receiver) = one_channel();
         let rc_terminator = data.terminator.clone();
         let logger_cloned = data.logger.clone();
-        let received = receiver.map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
+        let received = receiver
+            .map_err(|_| IoError::new(io::ErrorKind::Other, "Lost connection"))
             .map(Some)
             .then(move |r| {
                 trace!(logger_cloned, "Received RPC answer");
@@ -453,18 +455,13 @@ impl Client {
             // If we don't have the timeout, simply pass the future to get the response through.
             None => Box::new(received),
         };
-        data.idmap
-            .borrow_mut()
-            .insert(id, sender);
+        data.idmap.borrow_mut().insert(id, sender);
         // Ensure the connection is kept alive until the answer comes
         let sent = self.sender
             .send(msg)
             .map_err(shouldnt_happen)
             .map(move |sender| {
-                let client = Client {
-                    sender,
-                    data,
-                };
+                let client = Client { sender, data };
                 (client, completed)
             });
         Box::new(sent)
@@ -479,12 +476,7 @@ impl Client {
         let future = self.sender
             .send(Message::notification(method, params))
             .map_err(shouldnt_happen)
-            .map(move |sender| {
-                Client {
-                    sender,
-                    data,
-                }
-            });
+            .map(move |sender| Client { sender, data });
         Box::new(future)
     }
     /// Get the server control.
@@ -555,10 +547,11 @@ pub struct Endpoint<Connection, RpcServer> {
 }
 
 impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
-    where Connection: Stream<Item = Parsed, Error = IoError>,
-          Connection: Sink<SinkItem = Message, SinkError = IoError>,
-          Connection: Send + 'static,
-          RpcServer: Server + 'static
+where
+    Connection: Stream<Item = Parsed, Error = IoError>,
+    Connection: Sink<SinkItem = Message, SinkError = IoError>,
+    Connection: Send + 'static,
+    RpcServer: Server + 'static,
 {
     /// Create the endpoint builder.
     ///
@@ -611,20 +604,22 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         let idmap = Rc::new(RefCell::new(HashMap::new()));
         let rc_terminator = Rc::new(DropTerminator(Some(terminator_sender)));
         let ctl = ServerCtl(Rc::new(RefCell::new(ServerCtlInternal {
-                                                     stop: false,
-                                                     terminator: Some(rc_terminator.clone()),
-                                                     killer: Some(killer_sender),
-                                                     idmap: idmap.clone(),
-                                                     handle: handle.clone(),
-                                                     sender: Some(sender.clone()),
-                                                     logger: logger.clone(),
-                                                 })));
-        let client = Client::new(&idmap,
-                                 &ctl,
-                                 handle,
-                                 &rc_terminator,
-                                 &sender,
-                                 logger.clone());
+            stop: false,
+            terminator: Some(rc_terminator.clone()),
+            killer: Some(killer_sender),
+            idmap: idmap.clone(),
+            handle: handle.clone(),
+            sender: Some(sender.clone()),
+            logger: logger.clone(),
+        })));
+        let client = Client::new(
+            &idmap,
+            &ctl,
+            handle,
+            &rc_terminator,
+            &sender,
+            logger.clone(),
+        );
         let (sink, stream) = self.connection.split();
         // Create a future for each received item that'll return something. Run some of them in
         // parallel.
@@ -633,7 +628,8 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
 
         // A trick to terminate when the receiver fires. We mix a None into the stream from another
         // stream and stop when we find it, as a marker.
-        let terminator = terminator_receiver.map(|_| None)
+        let terminator = terminator_receiver
+            .map(|_| None)
             .map_err(shouldnt_happen)
             .into_stream();
         // Move out of self, otherwise the closure captures self, not only server :-|
@@ -655,13 +651,12 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
         });
         let idmap_cloned = idmap.clone();
         let logger_cloned = logger.clone();
-        let answers = stream.map(Some)
+        let answers = stream
+            .map(Some)
             .chain(cleaner)
             .select(terminator)
             .take_while(|m| Ok(m.is_some()))
-            .map(move |parsed| {
-                do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap())
-            })
+            .map(move |parsed| do_msg(&server, &ctl, &idmap, &logger_cloned, parsed.unwrap()))
             .flatten()
             .buffer_unordered(self.parallel)
             .filter_map(|message| message);
@@ -699,20 +694,22 @@ impl<Connection, RpcServer> Endpoint<Connection, RpcServer>
             });
         // Once the last thing is sent, we're done
         handle.spawn(transmitted);
-        let finished_errors = error_receiver.map_err(shouldnt_happen)
+        let finished_errors = error_receiver
+            .map_err(shouldnt_happen)
             .and_then(|maybe_error| match maybe_error {
-                          None => Ok(()),
-                          Some(e) => Err(e),
-                      });
+                None => Ok(()),
+                Some(e) => Err(e),
+            });
         debug!(logger, "Started endpoint");
         (client, Box::new(finished_errors))
     }
 }
 
 impl<Connection> Endpoint<Connection, EmptyServer>
-    where Connection: Stream<Item = Parsed, Error = IoError>,
-          Connection: Sink<SinkItem = Message, SinkError = IoError>,
-          Connection: Send + 'static
+where
+    Connection: Stream<Item = Parsed, Error = IoError>,
+    Connection: Sink<SinkItem = Message, SinkError = IoError>,
+    Connection: Send + 'static,
 {
     /// Create an endpoint with [`Empty`](../server/struct.Empty.html).
     ///

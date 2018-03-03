@@ -20,7 +20,7 @@ use bytes::{BufMut, BytesMut};
 use serde_json::ser::to_vec;
 use serde_json::error::Error as SerdeError;
 
-use message::{Message, Parsed, from_slice, from_str};
+use message::{from_slice, from_str, Message, Parsed};
 
 /// A helper to wrap the error
 fn err_map(e: SerdeError) -> Error {
@@ -42,10 +42,12 @@ fn encode_codec(msg: &Message, buf: &mut BytesMut) -> IoResult<()> {
     Ok(())
 }
 
-fn decode_codec<Cache, Convert>(cache: &mut Cache, buf: &mut BytesMut, convert: Convert)
-                                -> IoResult<Option<Parsed>>
-    where Cache: PositionCache,
-          Convert: FnOnce(&[u8]) -> Parsed
+fn decode_codec<Cache, Convert>(
+    cache: &mut Cache, buf: &mut BytesMut, convert: Convert
+) -> IoResult<Option<Parsed>>
+where
+    Cache: PositionCache,
+    Convert: FnOnce(&[u8]) -> Parsed,
 {
     // Where did we stop scanning before? Scan only the new part
     let start_pos = cache.position();
@@ -131,9 +133,9 @@ impl Decoder for DirtyLine {
     type Item = Parsed;
     type Error = Error;
     fn decode(&mut self, src: &mut BytesMut) -> IoResult<Option<Parsed>> {
-        decode_codec(self,
-                     src,
-                     |bytes| from_str(String::from_utf8_lossy(bytes).as_ref()))
+        decode_codec(self, src, |bytes| {
+            from_str(String::from_utf8_lossy(bytes).as_ref())
+        })
     }
 }
 
@@ -205,8 +207,10 @@ mod tests {
         let incomplete = Vec::from(&br#"{"jsonrpc": "2.0", "method":""#[..]);
         let mut oneandhalf = msgstring.clone();
         oneandhalf.extend_from_slice(&incomplete);
-        assert_eq!(one(&oneandhalf, &incomplete).unwrap(),
-                   Some(Ok(notif.clone())));
+        assert_eq!(
+            one(&oneandhalf, &incomplete).unwrap(),
+            Some(Ok(notif.clone()))
+        );
         // An incomplete message ‒ nothing gets out and everything stays
         assert_eq!(one(&incomplete, &incomplete).unwrap(), None);
         // A syntax error is reported as an error (and eaten, but that's no longer interesting)
@@ -232,7 +236,9 @@ mod tests {
         // But the dirty one just keeps going on
         let mut dirty = DirtyLine::new();
         let result = dirty.decode(&mut buf).unwrap();
-        assert_eq!(result,
-                   Some(Ok(Message::notification("Hello �World".to_owned(), None))));
+        assert_eq!(
+            result,
+            Some(Ok(Message::notification("Hello �World".to_owned(), None)))
+        );
     }
 }

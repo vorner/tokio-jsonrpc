@@ -13,7 +13,7 @@
 
 use futures::{Future, IntoFuture};
 use serde::Serialize;
-use serde_json::{Value, to_value};
+use serde_json::{to_value, Value};
 
 use endpoint::ServerCtl;
 use message::RpcError;
@@ -50,8 +50,9 @@ pub trait Server {
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
     /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
     /// regard.
-    fn rpc(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
-           -> Option<Self::RpcCallResult> {
+    fn rpc(
+        &self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>
+    ) -> Option<Self::RpcCallResult> {
         None
     }
     /// Called when the client sends a notification.
@@ -63,8 +64,9 @@ pub trait Server {
     /// Conversion of parameters and handling of errors is up to the implementer of this trait.
     /// However, the [`jsonrpc_params`](../macro.jsonrpc_params.html) macro may help in that
     /// regard.
-    fn notification(&self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>)
-                    -> Option<Self::NotificationResult> {
+    fn notification(
+        &self, _ctl: &ServerCtl, _method: &str, _params: &Option<Value>
+    ) -> Option<Self::NotificationResult> {
         None
     }
     /// Called when the endpoint is initialized.
@@ -120,21 +122,22 @@ impl<S: Server> Server for AbstractServer<S> {
     type Success = Value;
     type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RpcCallResult> {
+    fn rpc(
+        &self, ctl: &ServerCtl, method: &str, params: &Option<Value>
+    ) -> Option<Self::RpcCallResult> {
         self.0
             .rpc(ctl, method, params)
             .map(|f| -> Box<Future<Item = Value, Error = RpcError>> {
-                let future = f.into_future()
-                    .map(|result| {
-                        to_value(result)
-                            .expect("Your result type is not convertible to JSON, which is a bug")
-                    });
+                let future = f.into_future().map(|result| {
+                    to_value(result)
+                        .expect("Your result type is not convertible to JSON, which is a bug")
+                });
                 Box::new(future)
             })
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-                    -> Option<Self::NotificationResult> {
+    fn notification(
+        &self, ctl: &ServerCtl, method: &str, params: &Option<Value>
+    ) -> Option<Self::NotificationResult> {
         // It seems the type signature is computed from inside the closure and it doesn't fit on
         // the outside, so we need to declare it manually :-(
         self.0
@@ -150,9 +153,13 @@ impl<S: Server> Server for AbstractServer<S> {
 ///
 /// See also [`AbstractServer`](struct.AbstractServer.html) and
 /// [`ServerChain`](struct.ServerChain.html).
-pub type BoxServer = Box<Server<Success = Value,
-                                RpcCallResult = Box<Future<Item = Value, Error = RpcError>>,
-                                NotificationResult = Box<Future<Item = (), Error = ()>>>>;
+pub type BoxServer = Box<
+    Server<
+        Success = Value,
+        RpcCallResult = Box<Future<Item = Value, Error = RpcError>>,
+        NotificationResult = Box<Future<Item = (), Error = ()>>,
+    >,
+>;
 
 /// A server that chains several other servers.
 ///
@@ -192,12 +199,14 @@ impl Server for ServerChain {
     type Success = Value;
     type RpcCallResult = BoxRpcCallResult;
     type NotificationResult = BoxNotificationResult;
-    fn rpc(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-           -> Option<Self::RpcCallResult> {
+    fn rpc(
+        &self, ctl: &ServerCtl, method: &str, params: &Option<Value>
+    ) -> Option<Self::RpcCallResult> {
         self.iter_chain(|sub| sub.rpc(ctl, method, params))
     }
-    fn notification(&self, ctl: &ServerCtl, method: &str, params: &Option<Value>)
-                    -> Option<Self::NotificationResult> {
+    fn notification(
+        &self, ctl: &ServerCtl, method: &str, params: &Option<Value>
+    ) -> Option<Self::NotificationResult> {
         self.iter_chain(|sub| sub.notification(ctl, method, params))
     }
     fn initialized(&self, ctl: &ServerCtl) {
@@ -655,8 +664,9 @@ mod tests {
         type Success = bool;
         type RpcCallResult = Result<bool, RpcError>;
         type NotificationResult = Result<(), ()>;
-        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
-               -> Option<Self::RpcCallResult> {
+        fn rpc(
+            &self, _ctl: &ServerCtl, method: &str, params: &Option<Value>
+        ) -> Option<Self::RpcCallResult> {
             self.update(&self.rpc);
             match method {
                 "test" => {
@@ -666,8 +676,9 @@ mod tests {
                 _ => None,
             }
         }
-        fn notification(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
-                        -> Option<Self::NotificationResult> {
+        fn notification(
+            &self, _ctl: &ServerCtl, method: &str, params: &Option<Value>
+        ) -> Option<Self::NotificationResult> {
             self.update(&self.notification);
             assert!(params.is_none());
             match method {
@@ -689,17 +700,23 @@ mod tests {
         let log_server = LogServer::default();
         let abstract_server = AbstractServer::new(log_server);
         let (ctl, _, _) = ServerCtl::new_test();
-        let rpc_result = abstract_server.rpc(&ctl, "test", &None)
+        let rpc_result = abstract_server
+            .rpc(&ctl, "test", &None)
             .unwrap()
             .wait()
             .unwrap();
         assert_eq!(Value::Bool(true), rpc_result);
-        abstract_server.notification(&ctl, "notification", &None)
+        abstract_server
+            .notification(&ctl, "notification", &None)
             .unwrap()
             .wait()
             .unwrap();
         assert!(abstract_server.rpc(&ctl, "another", &None).is_none());
-        assert!(abstract_server.notification(&ctl, "another", &None).is_none());
+        assert!(
+            abstract_server
+                .notification(&ctl, "another", &None)
+                .is_none()
+        );
         abstract_server.initialized(&ctl);
         let log_server = abstract_server.into_inner();
         let expected = LogServer {
@@ -717,11 +734,10 @@ mod tests {
         type Success = usize;
         type RpcCallResult = Result<usize, RpcError>;
         type NotificationResult = Result<(), ()>;
-        fn rpc(&self, _ctl: &ServerCtl, method: &str, params: &Option<Value>)
-               -> Option<Self::RpcCallResult> {
-            assert!(params.as_ref()
-                        .unwrap()
-                        .is_null());
+        fn rpc(
+            &self, _ctl: &ServerCtl, method: &str, params: &Option<Value>
+        ) -> Option<Self::RpcCallResult> {
+            assert!(params.as_ref().unwrap().is_null());
             match method {
                 "another" => Some(Ok(42)),
                 _ => None,
@@ -739,23 +755,28 @@ mod tests {
         let log_server = LogServer::default();
         let another_server = AnotherServer;
         let (ctl, dropped, _killed) = ServerCtl::new_test();
-        let chain = ServerChain::new(vec![Box::new(AbstractServer::new(empty_server)),
-                                          Box::new(AbstractServer::new(log_server)),
-                                          Box::new(AbstractServer::new(another_server))]);
+        let chain = ServerChain::new(vec![
+            Box::new(AbstractServer::new(empty_server)),
+            Box::new(AbstractServer::new(log_server)),
+            Box::new(AbstractServer::new(another_server)),
+        ]);
         chain.initialized(&ctl);
         dropped.wait().unwrap();
-        assert_eq!(Value::Bool(true),
-                   chain.rpc(&ctl, "test", &None)
-                       .unwrap()
-                       .wait()
-                       .unwrap());
-        assert_eq!(json!(42),
-                   chain.rpc(&ctl, "another", &Some(Value::Null))
-                       .unwrap()
-                       .wait()
-                       .unwrap());
+        assert_eq!(
+            Value::Bool(true),
+            chain.rpc(&ctl, "test", &None).unwrap().wait().unwrap()
+        );
+        assert_eq!(
+            json!(42),
+            chain
+                .rpc(&ctl, "another", &Some(Value::Null))
+                .unwrap()
+                .wait()
+                .unwrap()
+        );
         assert!(chain.rpc(&ctl, "wrong", &Some(Value::Null)).is_none());
-        chain.notification(&ctl, "notification", &None)
+        chain
+            .notification(&ctl, "notification", &None)
             .unwrap()
             .wait()
             .unwrap();
@@ -807,7 +828,7 @@ mod tests {
     fn expect_no_params(params: &Option<Value>) -> Option<Result<(), RpcError>> {
         // Check that we can actually assign it somewhere (this may be needed in other macros later
         // on.
-        let () = jsonrpc_params!(params, );
+        let () = jsonrpc_params!(params,);
         Some(Ok(()))
     }
 
@@ -817,14 +838,26 @@ mod tests {
         // These are legal no-params, at least for us
         expect_no_params(&None).unwrap().unwrap();
         expect_no_params(&Some(Value::Null)).unwrap().unwrap();
-        expect_no_params(&Some(Value::Array(Vec::new()))).unwrap().unwrap();
-        expect_no_params(&Some(Value::Object(Map::new()))).unwrap().unwrap();
+        expect_no_params(&Some(Value::Array(Vec::new())))
+            .unwrap()
+            .unwrap();
+        expect_no_params(&Some(Value::Object(Map::new())))
+            .unwrap()
+            .unwrap();
         // Some illegal values
-        expect_no_params(&Some(Value::Bool(true))).unwrap().unwrap_err();
-        expect_no_params(&Some(json!([42, "hello"]))).unwrap().unwrap_err();
-        expect_no_params(&Some(json!({"hello": 42}))).unwrap().unwrap_err();
+        expect_no_params(&Some(Value::Bool(true)))
+            .unwrap()
+            .unwrap_err();
+        expect_no_params(&Some(json!([42, "hello"])))
+            .unwrap()
+            .unwrap_err();
+        expect_no_params(&Some(json!({"hello": 42})))
+            .unwrap()
+            .unwrap_err();
         expect_no_params(&Some(json!(42))).unwrap().unwrap_err();
-        expect_no_params(&Some(json!("hello"))).unwrap().unwrap_err();
+        expect_no_params(&Some(json!("hello")))
+            .unwrap()
+            .unwrap_err();
     }
 
     /// Test the single-param jsonrpc_params helper variant.
@@ -866,22 +899,49 @@ mod tests {
     fn positional() {
         // Some that don't match
         bool_str_positional(&None).unwrap().unwrap_err();
-        bool_str_positional(&Some(Value::Null)).unwrap().unwrap_err();
-        bool_str_positional(&Some(Value::Bool(true))).unwrap().unwrap_err();
-        bool_str_positional(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap_err();
-        bool_str_positional(&Some(json!([true]))).unwrap().unwrap_err();
-        bool_str_positional(&Some(json!([true, "hello", false]))).unwrap().unwrap_err();
-        bool_str_positional(&Some(json!([true, true]))).unwrap().unwrap_err();
+        bool_str_positional(&Some(Value::Null))
+            .unwrap()
+            .unwrap_err();
+        bool_str_positional(&Some(Value::Bool(true)))
+            .unwrap()
+            .unwrap_err();
+        bool_str_positional(&Some(json!({"b": true, "s": "hello"})))
+            .unwrap()
+            .unwrap_err();
+        bool_str_positional(&Some(json!([true])))
+            .unwrap()
+            .unwrap_err();
+        bool_str_positional(&Some(json!([true, "hello", false])))
+            .unwrap()
+            .unwrap_err();
+        bool_str_positional(&Some(json!([true, true])))
+            .unwrap()
+            .unwrap_err();
         // This one should be fine
-        assert_eq!((true, "hello".to_owned()),
-                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
+        assert_eq!(
+            (true, "hello".to_owned()),
+            bool_str_positional(&Some(json!([true, "hello"])))
+                .unwrap()
+                .unwrap()
+        );
 
         single_positional(&None).unwrap().unwrap_err();
         // We need two nested arrays
-        single_positional(&Some(json!(["Hello"]))).unwrap().unwrap_err();
-        assert!(single_positional(&Some(json!([[]]))).unwrap().unwrap().is_empty());
-        assert_eq!(vec!["hello", "world"],
-                   single_positional(&Some(json!([["hello", "world"]]))).unwrap().unwrap());
+        single_positional(&Some(json!(["Hello"])))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            single_positional(&Some(json!([[]])))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            vec!["hello", "world"],
+            single_positional(&Some(json!([["hello", "world"]])))
+                .unwrap()
+                .unwrap()
+        );
     }
 
     /// Similar to `positional`, but with using the macro wrap support to return a result.
@@ -893,9 +953,12 @@ mod tests {
         jsonrpc_params!(&Some(Value::Bool(true)), wrap positional bool, String).unwrap_err();
         jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})), wrap positional bool, String)
             .unwrap_err();
-        assert_eq!((true, "hello".to_owned()),
-                   jsonrpc_params!(&Some(json!([true, "hello"])),
-                                   wrap positional bool, String).unwrap());
+        assert_eq!(
+            (true, "hello".to_owned()),
+            jsonrpc_params!(&Some(json!([true, "hello"])),
+                                   wrap positional bool, String)
+                .unwrap()
+        );
         guard.disarm();
     }
 
@@ -927,27 +990,46 @@ mod tests {
     fn named() {
         bool_str_named(&None).unwrap().unwrap_err();
         bool_str_named(&Some(Value::Null)).unwrap().unwrap_err();
-        bool_str_named(&Some(Value::Bool(true))).unwrap().unwrap_err();
-        bool_str_named(&Some(json!([true, "hello"]))).unwrap().unwrap_err();
-        bool_str_named(&Some(json!({"b": true, "s": 42}))).unwrap().unwrap_err();
+        bool_str_named(&Some(Value::Bool(true)))
+            .unwrap()
+            .unwrap_err();
+        bool_str_named(&Some(json!([true, "hello"])))
+            .unwrap()
+            .unwrap_err();
+        bool_str_named(&Some(json!({"b": true, "s": 42})))
+            .unwrap()
+            .unwrap_err();
         // FIXME: This fails, as serde_json considers Value::Null to be an empty string
         //bool_str_named(&Some(json!({"b": true}))).unwrap_err();
-        bool_str_named(&Some(json!({"s": "hello"}))).unwrap().unwrap_err();
-        assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap());
+        bool_str_named(&Some(json!({"s": "hello"})))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            (true, "hello".to_owned()),
+            bool_str_named(&Some(json!({"b": true, "s": "hello"})))
+                .unwrap()
+                .unwrap()
+        );
         // FIXME: We currently don't know how to check against extra params
-        assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello", "x": 42})))
-                       .unwrap()
-                       .unwrap());
+        assert_eq!(
+            (true, "hello".to_owned()),
+            bool_str_named(&Some(json!({"b": true, "s": "hello", "x": 42})))
+                .unwrap()
+                .unwrap()
+        );
 
         single_named(&None).unwrap().unwrap_err();
         single_named(&Some(json!({"ts": 42}))).unwrap().unwrap_err();
-        single_named(&Some(json!({"ts": {"x": 42}}))).unwrap().unwrap();
+        single_named(&Some(json!({"ts": {"x": 42}})))
+            .unwrap()
+            .unwrap();
 
         optional_named(&None).unwrap().unwrap_err();
         optional_named(&Some(json!([]))).unwrap().unwrap_err();
-        assert_eq!(Some(42), optional_named(&Some(json!({"ov": 42}))).unwrap().unwrap());
+        assert_eq!(
+            Some(42),
+            optional_named(&Some(json!({"ov": 42}))).unwrap().unwrap()
+        );
         assert_eq!(None, optional_named(&Some(json!({}))).unwrap().unwrap());
     }
 
@@ -959,10 +1041,13 @@ mod tests {
         jsonrpc_params!(&Some(Value::Null), wrap named "b" => bool, "s" => String).unwrap_err();
         jsonrpc_params!(&Some(Value::Bool(true)),
                         wrap named "b" => bool, "s" => String)
-                .unwrap_err();
-        assert_eq!((true, "hello".to_owned()),
-                   jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
-                                   wrap "b" => bool, "s" => String).unwrap());
+            .unwrap_err();
+        assert_eq!(
+            (true, "hello".to_owned()),
+            jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
+                                   wrap "b" => bool, "s" => String)
+                .unwrap()
+        );
         jsonrpc_params!(&Some(json!([true, "hello"])), wrap named "b" => bool, "s" => String)
             .unwrap_err();
         guard.disarm();
@@ -982,10 +1067,18 @@ mod tests {
         bool_str(&None).unwrap().unwrap_err();
         bool_str(&Some(Value::Null)).unwrap().unwrap_err();
         bool_str(&Some(Value::Bool(true))).unwrap().unwrap_err();
-        assert_eq!((true, "hello".to_owned()),
-                   bool_str_named(&Some(json!({"b": true, "s": "hello"}))).unwrap().unwrap());
-        assert_eq!((true, "hello".to_owned()),
-                   bool_str_positional(&Some(json!([true, "hello"]))).unwrap().unwrap());
+        assert_eq!(
+            (true, "hello".to_owned()),
+            bool_str_named(&Some(json!({"b": true, "s": "hello"})))
+                .unwrap()
+                .unwrap()
+        );
+        assert_eq!(
+            (true, "hello".to_owned()),
+            bool_str_positional(&Some(json!([true, "hello"])))
+                .unwrap()
+                .unwrap()
+        );
     }
 
     /// Like `decide`, but with auto-wrapping support from the macro.
@@ -995,12 +1088,18 @@ mod tests {
         jsonrpc_params!(&None, wrap "b" => bool, "s" => String).unwrap_err();
         jsonrpc_params!(&Some(Value::Null), wrap "b" => bool, "s" => String).unwrap_err();
         jsonrpc_params!(&Some(Value::Bool(true)), wrap "b" => bool, "s" => String).unwrap_err();
-        assert_eq!((true, "hello".to_owned()),
-                   jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
-                                   wrap "b" => bool, "s" => String).unwrap());
-        assert_eq!((true, "hello".to_owned()),
-                   jsonrpc_params!(&Some(json!([true, "hello"])),
-                                   wrap "b" => bool, "s" => String).unwrap());
+        assert_eq!(
+            (true, "hello".to_owned()),
+            jsonrpc_params!(&Some(json!({"b": true, "s": "hello"})),
+                                   wrap "b" => bool, "s" => String)
+                .unwrap()
+        );
+        assert_eq!(
+            (true, "hello".to_owned()),
+            jsonrpc_params!(&Some(json!([true, "hello"])),
+                                   wrap "b" => bool, "s" => String)
+                .unwrap()
+        );
         guard.disarm();
     }
 
@@ -1019,16 +1118,30 @@ mod tests {
     fn decide_single() {
         decode_test_struct(&None).unwrap().unwrap_err();
         decode_test_struct(&Some(Value::Null)).unwrap().unwrap_err();
-        decode_test_struct(&Some(Value::Bool(true))).unwrap().unwrap_err();
+        decode_test_struct(&Some(Value::Bool(true)))
+            .unwrap()
+            .unwrap_err();
 
         // Encoded as an array
-        assert_eq!(TestStruct { x: 42 },
-                   decode_test_struct(&Some(json!([{"x": 42}]))).unwrap().unwrap());
+        assert_eq!(
+            TestStruct { x: 42 },
+            decode_test_struct(&Some(json!([{"x": 42}])))
+                .unwrap()
+                .unwrap()
+        );
         // Encoded as an object
-        assert_eq!(TestStruct { x: 42 },
-                   decode_test_struct(&Some(json!({"ts": {"x": 42}}))).unwrap().unwrap());
+        assert_eq!(
+            TestStruct { x: 42 },
+            decode_test_struct(&Some(json!({"ts": {"x": 42}})))
+                .unwrap()
+                .unwrap()
+        );
         // Encoded directly as the parameters structure
-        assert_eq!(TestStruct { x: 42 },
-                   decode_test_struct(&Some(json!({"x": 42}))).unwrap().unwrap());
+        assert_eq!(
+            TestStruct { x: 42 },
+            decode_test_struct(&Some(json!({"x": 42})))
+                .unwrap()
+                .unwrap()
+        );
     }
 }

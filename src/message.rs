@@ -14,7 +14,7 @@ use std::fmt::{Formatter, Result as FmtResult};
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde::de::{Deserialize, Deserializer, Error, Unexpected, Visitor};
-use serde_json::{Value, to_value};
+use serde_json::{to_value, Value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -64,18 +64,18 @@ impl Request {
     /// The ID is taken from the request.
     pub fn reply(&self, reply: Value) -> Message {
         Message::Response(Response {
-                              jsonrpc: Version,
-                              result: Ok(reply),
-                              id: self.id.clone(),
-                          })
+            jsonrpc: Version,
+            result: Ok(reply),
+            id: self.id.clone(),
+        })
     }
     /// Answer the request with an error.
     pub fn error(&self, error: RpcError) -> Message {
         Message::Response(Response {
-                              jsonrpc: Version,
-                              result: Err(error),
-                              id: self.id.clone(),
-                          })
+            jsonrpc: Version,
+            result: Err(error),
+            id: self.id.clone(),
+        })
     }
 }
 
@@ -106,9 +106,11 @@ impl RpcError {
     }
     /// Create a server error.
     pub fn server_error<E: Serialize>(e: Option<E>) -> Self {
-        RpcError::new(-32_000,
-                      "Server error".to_owned(),
-                      e.map(|v| to_value(v).expect("Must be representable in JSON")))
+        RpcError::new(
+            -32_000,
+            "Server error".to_owned(),
+            e.map(|v| to_value(v).expect("Must be representable in JSON")),
+        )
     }
     /// Create an invalid request error.
     pub fn invalid_request() -> Self {
@@ -120,9 +122,11 @@ impl RpcError {
     }
     /// Create a method not found error.
     pub fn method_not_found(method: String) -> Self {
-        RpcError::new(-32_601,
-                      "Method not found".to_owned(),
-                      Some(Value::String(method)))
+        RpcError::new(
+            -32_601,
+            "Method not found".to_owned(),
+            Some(Value::String(method)),
+        )
     }
 }
 
@@ -187,10 +191,10 @@ impl<'de> Deserialize<'de> for Response {
             },
         };
         Ok(Response {
-               jsonrpc: Version,
-               result,
-               id: wr.id,
-           })
+            jsonrpc: Version,
+            result,
+            id: wr.id,
+        })
     }
 }
 
@@ -248,27 +252,27 @@ impl Message {
     /// The ID is auto-generated.
     pub fn request(method: String, params: Option<Value>) -> Self {
         Message::Request(Request {
-                             jsonrpc: Version,
-                             method,
-                             params,
-                             id: Value::String(Uuid::new_v4().hyphenated().to_string()),
-                         })
+            jsonrpc: Version,
+            method,
+            params,
+            id: Value::String(Uuid::new_v4().hyphenated().to_string()),
+        })
     }
     /// Create a top-level error (without an ID).
     pub fn error(error: RpcError) -> Self {
         Message::Response(Response {
-                              jsonrpc: Version,
-                              result: Err(error),
-                              id: Value::Null,
-                          })
+            jsonrpc: Version,
+            result: Err(error),
+            id: Value::Null,
+        })
     }
     /// A constructor for a notification.
     pub fn notification(method: String, params: Option<Value>) -> Self {
         Message::Notification(Notification {
-                                  jsonrpc: Version,
-                                  method,
-                                  params,
-                              })
+            jsonrpc: Version,
+            method,
+            params,
+        })
     }
 }
 
@@ -364,51 +368,64 @@ mod tests {
         }
 
         // A request without parameters
-        one(r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "method": "call", "id": 1}"#,
             &Message::Request(Request {
-                                  jsonrpc: Version,
-                                  method: "call".to_owned(),
-                                  params: None,
-                                  id: json!(1),
-                              }));
+                jsonrpc: Version,
+                method: "call".to_owned(),
+                params: None,
+                id: json!(1),
+            }),
+        );
         // A request with parameters
-        one(r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "method": "call", "params": [1, 2, 3], "id": 2}"#,
             &Message::Request(Request {
-                                  jsonrpc: Version,
-                                  method: "call".to_owned(),
-                                  params: Some(json!([1, 2, 3])),
-                                  id: json!(2),
-                              }));
+                jsonrpc: Version,
+                method: "call".to_owned(),
+                params: Some(json!([1, 2, 3])),
+                id: json!(2),
+            }),
+        );
         // A notification (with parameters)
-        one(r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "method": "notif", "params": {"x": "y"}}"#,
             &Message::Notification(Notification {
-                                       jsonrpc: Version,
-                                       method: "notif".to_owned(),
-                                       params: Some(json!({"x": "y"})),
-                                   }));
+                jsonrpc: Version,
+                method: "notif".to_owned(),
+                params: Some(json!({"x": "y"})),
+            }),
+        );
         // A successful response
-        one(r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "result": 42, "id": 3}"#,
             &Message::Response(Response {
-                                   jsonrpc: Version,
-                                   result: Ok(json!(42)),
-                                   id: json!(3),
-                               }));
+                jsonrpc: Version,
+                result: Ok(json!(42)),
+                id: json!(3),
+            }),
+        );
         // A successful response
-        one(r#"{"jsonrpc": "2.0", "result": null, "id": 3}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "result": null, "id": 3}"#,
             &Message::Response(Response {
-                                   jsonrpc: Version,
-                                   result: Ok(Value::Null),
-                                   id: json!(3),
-                               }));
+                jsonrpc: Version,
+                result: Ok(Value::Null),
+                id: json!(3),
+            }),
+        );
         // An error
-        one(r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
+        one(
+            r#"{"jsonrpc": "2.0", "error": {"code": 42, "message": "Wrong!"}, "id": null}"#,
             &Message::Response(Response {
-                                   jsonrpc: Version,
-                                   result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
-                                   id: Value::Null,
-                               }));
+                jsonrpc: Version,
+                result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
+                id: Value::Null,
+            }),
+        );
         // A batch
-        one(r#"[
+        one(
+            r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
                 {"jsonrpc": "2.0", "method": "call", "id": 42}
             ]"#,
@@ -424,15 +441,18 @@ mod tests {
                     params: None,
                     id: json!(42),
                 }),
-            ]));
+            ]),
+        );
         // Some handling of broken messages inside a batch
-        let parsed = from_str(r#"[
+        let parsed = from_str(
+            r#"[
                 {"jsonrpc": "2.0", "method": "notif"},
                 {"jsonrpc": "2.0", "method": "call", "id": 42},
                 true
-            ]"#)
-                .unwrap();
-        assert_eq!(Message::Batch(vec![
+            ]"#,
+        ).unwrap();
+        assert_eq!(
+            Message::Batch(vec![
                 Message::Notification(Notification {
                     jsonrpc: Version,
                     method: "notif".to_owned(),
@@ -445,7 +465,9 @@ mod tests {
                     id: json!(42),
                 }),
                 Message::UnmatchedSub(Value::Bool(true)),
-            ]), parsed);
+            ]),
+            parsed
+        );
         to_vec(&Message::UnmatchedSub(Value::Null)).unwrap_err();
     }
 
@@ -508,34 +530,45 @@ mod tests {
         let id1 = req1.id.clone();
         // When we answer a message, we get the same ID
         if let Message::Response(ref resp) = req1.reply(json!([1, 2, 3])) {
-            assert_eq!(*resp, Response {
-                jsonrpc: Version,
-                result: Ok(json!([1, 2, 3])),
-                id: id1,
-            });
+            assert_eq!(
+                *resp,
+                Response {
+                    jsonrpc: Version,
+                    result: Ok(json!([1, 2, 3])),
+                    id: id1,
+                }
+            );
         } else {
             panic!("Not a response");
         }
         let id2 = req2.id.clone();
         // The same with an error
         if let Message::Response(ref resp) =
-            req2.error(RpcError::new(42, "Wrong!".to_owned(), None)) {
-            assert_eq!(*resp, Response {
-                jsonrpc: Version,
-                result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
-                id: id2,
-            });
+            req2.error(RpcError::new(42, "Wrong!".to_owned(), None))
+        {
+            assert_eq!(
+                *resp,
+                Response {
+                    jsonrpc: Version,
+                    result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
+                    id: id2,
+                }
+            );
         } else {
             panic!("Not a response");
         }
         // When we have unmatched, we generate a top-level error with Null id.
         if let Message::Response(ref resp) =
-            Message::error(RpcError::new(43, "Also wrong!".to_owned(), None)) {
-            assert_eq!(*resp, Response {
-                jsonrpc: Version,
-                result: Err(RpcError::new(43, "Also wrong!".to_owned(), None)),
-                id: Value::Null,
-            });
+            Message::error(RpcError::new(43, "Also wrong!".to_owned(), None))
+        {
+            assert_eq!(
+                *resp,
+                Response {
+                    jsonrpc: Version,
+                    result: Err(RpcError::new(43, "Also wrong!".to_owned(), None)),
+                    id: Value::Null,
+                }
+            );
         } else {
             panic!("Not a response");
         }
