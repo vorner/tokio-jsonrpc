@@ -68,8 +68,8 @@ where
 
 /// A codec working with JSONRPC 2.0 messages.
 ///
-/// This produces or encodes [Message](../message/enum.Message.hmtl). It separates the records by
-/// newlines, so it can recover from syntax error.s
+/// This produces or encodes [Message](../message/enum.Message.html). It separates the records by
+/// newlines, so it can recover from syntax errors.
 ///
 /// Note that the produced items is a `Result`, to allow not terminating the stream on
 /// protocol-level errors.
@@ -150,7 +150,7 @@ impl Encoder for DirtyLine {
 
 /// A codec working with JSONRPC 2.0 messages.
 ///
-/// This produces or encodes [Message](../message/enum.Message.hmtl). It takes the JSON object
+/// This produces or encodes [Message](../message/enum.Message.html). It takes the JSON object
 /// boundaries, so it works with both newline-separated and object-separated encoding. It produces
 /// newline-separated stream, which is more generic.
 pub struct Boundary;
